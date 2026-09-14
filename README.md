@@ -128,7 +128,6 @@ v poli „Poslední chyba Fio“:
   `pos.payment.fio_pending_overview(config_id)`, tlačítko v popupu
   `pos.payment.fio_refresh_from_bank(config_id)`. Každý dotaz lišty zapíše heartbeat
   `pos.config.fio_pos_last_seen` (nejvýš po 30 s); cron podle něj pozná běžící pokladnu.
-- Aktualizace z 19.0.1.0.0: migrace přepne cron z hodiny na 5 minut (záznam je `noupdate`).
 - Instalace (`post_init_hook`): všechny dosavadní QR platby → _Čeká na banku_; „Historie od“
   na účtu deníku QR metody.
 - Pokladna Odoo 19 načítá u `pos.payment` **všechna pole** (`_load_pos_data_fields` vrací `[]`)
