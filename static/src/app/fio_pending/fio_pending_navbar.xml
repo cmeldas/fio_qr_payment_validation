@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates id="template" xml:space="preserve">
+
+    <t t-name="fio_qr_payment_validation.Navbar" t-inherit="point_of_sale.Navbar" t-inherit-mode="extension">
+        <xpath expr="//CashierName" position="before">
+            <button class="fio-pending-btn btn btn-light btn-lg lh-lg position-relative"
+                    t-att-class="{ 'text-danger': pos.fioPending.count }"
+                    t-on-click="openFioPending"
+                    title="QR platby čekající na potvrzení bankou">
+                <i class="fa fa-fw fa-lg fa-money" role="img" aria-label="QR platby"/>
+                <span t-if="pos.fioPending.count"
+                      class="fio-pending-badge position-absolute badge rounded-pill bg-danger text-white"
+                      style="top: -4px; right: -4px; font-size: 0.7rem;"
+                      t-esc="pos.fioPending.count"/>
+            </button>
+        </xpath>
+    </t>
+
+</templates>

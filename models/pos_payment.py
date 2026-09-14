@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+from datetime import timedelta
+
 from odoo import api, fields, models
 
 FIO_STATES = [
@@ -90,6 +92,36 @@ class PosPayment(models.Model):
                 tx._link_pos_payment(self, "reference")
                 return True
         return False
+
+    @api.model
+    def fio_pending_overview(self, config_id, limit=50):
+        """Pro lištu pokladny: QR platby čekající na banku u objednávek této pokladny.
+
+        Vrací počet a seznam nejnovějších (datum, číslo objednávky, částka) k zobrazení
+        v popupu; rozsah dní zpět určuje nastavení pokladny „Nespárované QR platby: dny zpět“.
+        """
+        config = self.env["pos.config"].browse(config_id).exists()
+        domain = [("fio_state", "=", "pending"), ("pos_order_id.config_id", "=", config.id)]
+        if config and config.fio_pending_days > 0:
+            since = fields.Datetime.now() - timedelta(days=config.fio_pending_days)
+            domain.append(("payment_date", ">=", since))
+        payments = self.sudo().search(domain, order="payment_date desc, id desc", limit=limit)
+        return {
+            "count": self.sudo().search_count(domain),
+            "payments": [
+                {
+                    "id": payment.id,
+                    "payment_date": fields.Datetime.to_string(payment.payment_date),
+                    "amount": payment.amount,
+                    "order_id": payment.pos_order_id.id,
+                    "order_name": payment.pos_order_id.name or "",
+                    "pos_reference": payment.pos_order_id.pos_reference or "",
+                    "tracking_number": payment.pos_order_id.tracking_number or "",
+                    "partner_name": payment.pos_order_id.partner_id.name or "",
+                }
+                for payment in payments
+            ],
+        }
 
     def action_fio_confirm_manual(self):
         self.write({"fio_state": "manual", "fio_confirmed_at": fields.Datetime.now()})

@@ -195,6 +195,37 @@ class TestFioMatching(CommonPosTest):
         self.assertEqual(qr.fio_state, "pending")
         self.assertEqual(qr.amount, 2.0)
 
+    def test_pending_overview_for_pos_navbar(self):
+        Payment = self.env["pos.payment"]
+        config = self.pos_config_usd
+        before = Payment.fio_pending_overview(config.id)
+        order = self._order(self.product_80, self.qr_payment_method, pos_reference="Order 261-1-000088")
+        payment = order.payment_ids
+        cash_order = self._order(self.product_80, self.cash_payment_method)
+        overview = Payment.fio_pending_overview(config.id)
+        self.assertEqual(overview["count"], before["count"] + 1)
+        row = next(r for r in overview["payments"] if r["id"] == payment.id)
+        self.assertEqual(row["pos_reference"], "Order 261-1-000088")
+        self.assertEqual(row["order_id"], order.id)
+        self.assertAlmostEqual(row["amount"], order.amount_total)
+        self.assertTrue(row["payment_date"])
+        self.assertFalse(any(r["order_id"] == cash_order.id for r in overview["payments"]))
+
+        payment.action_fio_confirm_manual()
+        self.assertEqual(Payment.fio_pending_overview(config.id)["count"], before["count"], "ručně potvrzená zmizí")
+        payment.action_fio_reset_pending()
+        payment.action_fio_ignore()
+        self.assertEqual(Payment.fio_pending_overview(config.id)["count"], before["count"], "ignorovaná zmizí")
+
+        payment.action_fio_reset_pending()
+        config.fio_pending_days = 1
+        payment.write({"payment_date": fields.Datetime.now() - timedelta(days=3)})
+        self.assertFalse(any(r["id"] == payment.id for r in Payment.fio_pending_overview(config.id)["payments"]),
+                         "starší než nastavený počet dní se nepočítá")
+        config.fio_pending_days = 0
+        self.assertTrue(any(r["id"] == payment.id for r in Payment.fio_pending_overview(config.id)["payments"]))
+        self.assertEqual(Payment.fio_pending_overview(self.pos_config_eur.id)["count"], 0, "jiná pokladna nevidí cizí platby")
+
     def test_exact_amount_without_tip(self):
         order = self._order(self.product_80, self.qr_payment_method, pos_reference="Order 261-1-000006")
         tx = self._store([fio_transaction(110, date.today(), order.amount_total, "Order 261-1-000006 6")])

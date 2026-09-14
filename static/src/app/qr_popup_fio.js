@@ -7,16 +7,15 @@ import { onMounted, onWillUnmount, useState } from "@odoo/owl";
 
 /** Jak často se pokladna ptá serveru (server sám volá Fio nejvýš jednou za 30 s). */
 const POLL_INTERVAL_MS = 5000;
-/** Po kolika ms od potvrzení bankou se platba potvrdí sama (obsluha může kliknout dřív). */
-const AUTO_CONFIRM_DELAY_MS = 3000;
 
 /**
  * Ověření QR platby proti Fio, dokud je otevřený QR kód v pokladně.
  *
- * Server vrací `confirmed`, když na účet dorazil příchozí pohyb ve stejné částce
+ * Server vrací `confirmed`, když na účet dorazil příchozí pohyb pokrývající částku
  * s číslem objednávky ve zprávě (nebo jediný dnešní pohyb v té částce). Pohyb si
- * server rezervuje pro objednávku a spáruje ho při jejím uložení. Popup ukáže
- * „Automaticky potvrzeno“, pošle stav na zákaznický displej a po chvíli platbu potvrdí.
+ * server rezervuje pro objednávku a spáruje ho při jejím uložení. Popup ukáže zelené
+ * „Automaticky potvrzeno“ a pošle stav na zákaznický displej; potvrzení zůstává, dokud
+ * obsluha neklikne na „Potvrdit platbu“ (zákazník tak vidí „Platba přijata“ stejně dlouho).
  */
 patch(QRPopup.prototype, {
     setup() {
@@ -108,10 +107,6 @@ patch(QRPopup.prototype, {
             type: "success",
         });
         clearTimeout(this.fioTimer);
-        this.fioTimer = setTimeout(() => {
-            if (!this.fioStopped) {
-                this._confirm();
-            }
-        }, AUTO_CONFIRM_DELAY_MS);
+        this.fioTimer = null;
     },
 });

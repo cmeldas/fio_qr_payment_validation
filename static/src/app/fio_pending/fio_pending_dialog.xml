@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates id="template" xml:space="preserve">
+
+    <t t-name="fio_qr_payment_validation.FioPendingDialog">
+        <Dialog size="'md'" title="title">
+            <div t-if="!props.payments.length" class="text-muted py-3 text-center">
+                <i class="fa fa-check-circle text-success me-1" role="img" aria-label="OK"/>
+                Žádné QR platby nečekají na banku.
+            </div>
+            <div t-else="" class="fio-pending-list overflow-auto" style="max-height: 60vh;">
+                <table class="table table-sm align-middle mb-0">
+                    <thead>
+                        <tr>
+                            <th>Datum a čas</th>
+                            <th>Objednávka</th>
+                            <th class="text-end">Částka</th>
+                            <th/>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr t-foreach="props.payments" t-as="row" t-key="row.id" class="fio-pending-row">
+                            <td class="text-nowrap" t-esc="formatDate(row.payment_date)"/>
+                            <td>
+                                <div class="fw-bold" t-esc="orderLabel(row)"/>
+                                <div t-if="row.partner_name" class="small text-muted" t-esc="row.partner_name"/>
+                            </td>
+                            <td class="text-end text-nowrap fw-bold" t-esc="formatAmount(row.amount)"/>
+                            <td class="text-end">
+                                <button class="btn btn-sm btn-secondary text-nowrap" t-on-click="() => this.openOrder(row)">
+                                    <i class="fa fa-external-link me-1" role="img" aria-label="Otevřít"/>Detail
+                                </button>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            <div t-if="props.count > props.payments.length" class="small text-muted mt-2">
+                Zobrazeno <t t-esc="props.payments.length"/> z <t t-esc="props.count"/>; všechny jsou v administraci
+                (Prodejní místo › Objednávky › QR platby ke kontrole).
+            </div>
+            <t t-set-slot="footer">
+                <button class="btn btn-primary" t-on-click="props.close">Zavřít</button>
+            </t>
+        </Dialog>
+    </t>
+
+</templates>

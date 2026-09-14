@@ -10,12 +10,21 @@
                 <i class="fa fa-check-circle fa-3x d-block mb-2" role="img" aria-label="Potvrzeno"/>
                 <div class="h4 mb-1">Automaticky potvrzeno</div>
                 <div t-if="fio.detail" class="small" t-out="fio.detail"/>
-                <div class="small text-muted mt-1">Objednávka se za chvíli dokončí sama.</div>
+                <div class="small text-muted mt-1">Dokonči objednávku tlačítkem „Potvrdit platbu“.</div>
             </div>
             <div t-elif="fio.status === 'checking'" class="fio_qr_checking small text-muted mt-2">
                 <i class="fa fa-refresh fa-spin me-1" role="img" aria-label="Kontrola"/>Čekám na platbu v bance…
             </div>
             <div t-elif="fio.status === 'error'" class="fio_qr_error small text-warning mt-2" t-out="fio.detail"/>
+        </xpath>
+        <!-- po potvrzení bankou je hlavní akcí Potvrdit platbu (zelené), Zrušit ustoupí -->
+        <xpath expr="//button[@t-on-click='_confirm']" position="attributes">
+            <attribute name="class" remove="btn-secondary" separator=" "/>
+            <attribute name="t-att-class">{ 'btn-success': fio.status === 'confirmed', 'btn-secondary': fio.status !== 'confirmed' }</attribute>
+        </xpath>
+        <xpath expr="//button[@t-on-click='_cancel']" position="attributes">
+            <attribute name="class" remove="btn-primary" separator=" "/>
+            <attribute name="t-att-class">{ 'btn-primary': fio.status !== 'confirmed', 'btn-secondary': fio.status === 'confirmed' }</attribute>
         </xpath>
     </t>
 
