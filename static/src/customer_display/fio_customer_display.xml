@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates id="template" xml:space="preserve">
+
+    <t t-name="fio_qr_payment_validation.CustomerDisplay" t-inherit="point_of_sale.CustomerDisplay" t-inherit-mode="extension">
+        <xpath expr="//div[hasclass('o_customer_display')]" position="inside">
+            <div t-if="fio.confirmed"
+                 class="fio_customer_confirmed position-fixed top-0 start-0 w-100 h-100 d-flex flex-column align-items-center justify-content-center text-center text-white p-4"
+                 style="z-index: 3000; background: rgba(25, 135, 84, 0.97);">
+                <i class="fa fa-check-circle mb-3" style="font-size: 8rem;" role="img" aria-label="Zaplaceno"/>
+                <div class="display-3 fw-bold">Platba přijata</div>
+                <div class="fs-2 mt-2">Automaticky potvrzeno bankou. Děkujeme!</div>
+            </div>
+        </xpath>
+    </t>
+
+</templates>

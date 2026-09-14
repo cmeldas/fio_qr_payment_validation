@@ -1,0 +1,130 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_pos_payment_form_inherit_fio" model="ir.ui.view">
+        <field name="name">pos.payment.form.fio</field>
+        <field name="model">pos.payment</field>
+        <field name="inherit_id" ref="point_of_sale.view_pos_payment_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//sheet" position="before">
+                <header>
+                    <button name="action_fio_confirm_manual" type="object" string="Potvrdit ručně" class="btn-primary"
+                            invisible="fio_state not in ('pending', 'ignored')" groups="point_of_sale.group_pos_manager"
+                            help="Platba byla zkontrolována jinak (výpis, potvrzení plátce); bankovní pohyb se k ní může dopárovat později."/>
+                    <button name="action_fio_ignore" type="object" string="Ignorovat"
+                            invisible="fio_state != 'pending'" groups="point_of_sale.group_pos_manager"/>
+                    <button name="action_fio_reset_pending" type="object" string="Vrátit ke kontrole"
+                            invisible="fio_state in ('none', 'pending')" groups="point_of_sale.group_pos_manager"/>
+                    <field name="fio_state" widget="statusbar" statusbar_visible="pending,confirmed"
+                           invisible="fio_state == 'none'"/>
+                </header>
+            </xpath>
+            <xpath expr="//sheet/group" position="after">
+                <group string="Ověření Fio" name="fio" invisible="fio_state == 'none'">
+                    <field name="pos_reference"/>
+                    <field name="fio_transaction_id"/>
+                    <field name="fio_match_type" invisible="not fio_transaction_id"/>
+                    <field name="fio_confirmed_at" invisible="not fio_confirmed_at"/>
+                </group>
+            </xpath>
+        </field>
+    </record>
+
+    <record id="view_pos_payment_tree_inherit_fio" model="ir.ui.view">
+        <field name="name">pos.payment.list.fio</field>
+        <field name="model">pos.payment</field>
+        <field name="inherit_id" ref="point_of_sale.view_pos_payment_tree"/>
+        <field name="arch" type="xml">
+            <field name="amount" position="after">
+                <field name="fio_state" widget="badge" optional="show"
+                       decoration-success="fio_state == 'confirmed'"
+                       decoration-warning="fio_state == 'pending'"
+                       decoration-info="fio_state == 'manual'"
+                       decoration-muted="fio_state == 'ignored'"/>
+            </field>
+        </field>
+    </record>
+
+    <record id="view_pos_payment_search_inherit_fio" model="ir.ui.view">
+        <field name="name">pos.payment.search.fio</field>
+        <field name="model">pos.payment</field>
+        <field name="inherit_id" ref="point_of_sale.view_pos_payment_search"/>
+        <field name="arch" type="xml">
+            <field name="pos_order_id" position="after">
+                <field name="pos_reference"/>
+                <filter name="fio_pending" string="QR čeká na banku" domain="[('fio_state', '=', 'pending')]"/>
+                <filter name="fio_confirmed" string="QR potvrzeno bankou" domain="[('fio_state', '=', 'confirmed')]"/>
+                <filter name="fio_manual" string="QR potvrzeno ručně" domain="[('fio_state', '=', 'manual')]"/>
+                <filter name="fio_ignored" string="QR ignorováno" domain="[('fio_state', '=', 'ignored')]"/>
+                <separator/>
+            </field>
+            <xpath expr="//search/group" position="inside">
+                <filter name="group_by_fio_state" string="Ověření Fio" domain="[]" context="{'group_by': 'fio_state'}"/>
+            </xpath>
+        </field>
+    </record>
+
+    <!-- Přehled QR plateb ke kontrole: řádkové akce potvrdit / ignorovat -->
+    <record id="view_pos_payment_fio_check_list" model="ir.ui.view">
+        <field name="name">pos.payment.fio.check.list</field>
+        <field name="model">pos.payment</field>
+        <field name="priority">50</field>
+        <field name="arch" type="xml">
+            <list string="QR platby ke kontrole" create="0" delete="0" default_order="payment_date desc"
+                  decoration-warning="fio_state == 'pending'" decoration-muted="fio_state == 'ignored'">
+                <field name="currency_id" column_invisible="True"/>
+                <field name="payment_date"/>
+                <field name="pos_order_id"/>
+                <field name="pos_reference" optional="show"/>
+                <field name="payment_method_id" optional="hide"/>
+                <field name="session_id" optional="hide"/>
+                <field name="user_id" widget="many2one_avatar_employee" optional="hide"/>
+                <field name="amount" sum="Celkem"/>
+                <field name="fio_state" widget="badge"
+                       decoration-success="fio_state == 'confirmed'"
+                       decoration-warning="fio_state == 'pending'"
+                       decoration-info="fio_state == 'manual'"
+                       decoration-muted="fio_state == 'ignored'"/>
+                <field name="fio_transaction_id" optional="show"/>
+                <field name="fio_confirmed_at" optional="hide"/>
+                <button name="action_fio_confirm_manual" type="object" icon="fa-check" title="Potvrdit ručně (zkontrolováno)"
+                        invisible="fio_state != 'pending'" groups="point_of_sale.group_pos_manager"/>
+                <button name="action_fio_ignore" type="object" icon="fa-ban" title="Ignorovat"
+                        invisible="fio_state != 'pending'" groups="point_of_sale.group_pos_manager"/>
+                <button name="action_fio_reset_pending" type="object" icon="fa-undo" title="Vrátit ke kontrole"
+                        invisible="fio_state in ('none', 'pending')" groups="point_of_sale.group_pos_manager"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="action_pos_payment_fio_check" model="ir.actions.act_window">
+        <field name="name">QR platby ke kontrole</field>
+        <field name="res_model">pos.payment</field>
+        <field name="view_mode">list,form</field>
+        <field name="domain">[('fio_state', '!=', 'none')]</field>
+        <field name="context">{'search_default_fio_pending': 1}</field>
+        <field name="view_ids" eval="[(5, 0, 0),
+            (0, 0, {'view_mode': 'list', 'view_id': ref('view_pos_payment_fio_check_list')}),
+            (0, 0, {'view_mode': 'form', 'view_id': ref('point_of_sale.view_pos_payment_form')})]"/>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">Žádné QR platby nečekají na kontrolu</p>
+            <p>Sem spadnou QR platby z pokladny, ke kterým banka ještě neposlala pohyb.
+               Po stažení pohybů z Fio se spárují samy; co nesedí, potvrď ručně nebo ignoruj.</p>
+        </field>
+    </record>
+
+    <!-- Sloupec ověření v seznamu plateb na objednávce -->
+    <record id="view_pos_pos_form_inherit_fio" model="ir.ui.view">
+        <field name="name">pos.order.form.fio</field>
+        <field name="model">pos.order</field>
+        <field name="inherit_id" ref="point_of_sale.view_pos_pos_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//field[@name='payment_ids']/list/field[@name='amount']" position="after">
+                <field name="fio_state" widget="badge" optional="show"
+                       decoration-success="fio_state == 'confirmed'"
+                       decoration-warning="fio_state == 'pending'"
+                       decoration-info="fio_state == 'manual'"
+                       decoration-muted="fio_state == 'ignored'"/>
+            </xpath>
+        </field>
+    </record>
+</odoo>

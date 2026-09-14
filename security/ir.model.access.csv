@@ -1,0 +1,6 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_fio_bank_transaction_pos_user,fio.bank.transaction pos user,model_fio_bank_transaction,point_of_sale.group_pos_user,1,0,0,0
+access_fio_bank_transaction_pos_manager,fio.bank.transaction pos manager,model_fio_bank_transaction,point_of_sale.group_pos_manager,1,1,1,1
+access_fio_bank_transaction_account_manager,fio.bank.transaction account manager,model_fio_bank_transaction,account.group_account_manager,1,1,1,1
+access_fio_match_wizard_pos_manager,fio.match.wizard pos manager,model_fio_match_wizard,point_of_sale.group_pos_manager,1,1,1,1
+access_fio_match_wizard_account_manager,fio.match.wizard account manager,model_fio_match_wizard,account.group_account_manager,1,1,1,1

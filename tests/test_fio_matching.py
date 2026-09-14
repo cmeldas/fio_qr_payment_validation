@@ -1,0 +1,330 @@
+# -*- coding: utf-8 -*-
+"""Párování pohybů Fio s QR platbami pokladny a fakturami. Fio API se nevolá, odpovědi se podstrkují."""
+from datetime import date, timedelta
+from unittest.mock import patch
+
+from odoo import Command, fields
+from odoo.exceptions import UserError
+from odoo.tests import tagged
+from odoo.addons.point_of_sale.tests.common import CommonPosTest
+
+from ..models import fio_api
+
+
+def fio_cell(value):
+    return None if value is None else {"value": value}
+
+
+def fio_transaction(fio_id, day, amount, message=None, vs=None, ident=None, counter_name="Jan Novák", currency="CZK"):
+    """Jeden pohyb ve tvaru, v jakém ho posílá Fio (sloupce column<N>)."""
+    return {
+        "column22": fio_cell(fio_id),
+        "column0": fio_cell(f"{day:%Y-%m-%d}+0200"),
+        "column1": fio_cell(amount),
+        "column14": fio_cell(currency),
+        "column2": fio_cell("123456789"),
+        "column3": fio_cell("0800"),
+        "column10": fio_cell(counter_name),
+        "column4": None,
+        "column5": fio_cell(vs),
+        "column6": None,
+        "column7": fio_cell(ident),
+        "column16": fio_cell(message),
+        "column8": fio_cell("Okamžitá příchozí platba"),
+        "column9": None,
+        "column18": None,
+        "column25": None,
+        "column26": None,
+        "column17": None,
+    }
+
+
+def fio_payload(transactions):
+    return {
+        "accountStatement": {
+            "info": {"accountId": "2401835999", "bankId": "2010", "currency": "CZK"},
+            "transactionList": {"transaction": transactions},
+        }
+    }
+
+
+@tagged("post_install", "-at_install")
+class TestFioMatching(CommonPosTest):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        # Holé Odoo nemá žádnou metodu QR kódu (dodává ji např. cz_qr_payment); pro platební
+        # metodu typu QR se podstrčí testovací.
+        cls.startClassPatcher(patch.object(
+            type(cls.env["res.partner.bank"]), "_get_available_qr_methods",
+            return_value=[("test_qr", "Testovací QR", 10)],
+        ))
+        cls.bank_account = cls.env["res.partner.bank"].create({
+            "acc_number": "CZ3820100000002401835999",
+            "partner_id": cls.env.company.partner_id.id,
+            "fio_api_token": "t" * 64,
+        })
+        cls.bank_journal = cls.env["account.journal"].create({
+            "name": "Fio", "type": "bank", "code": "FIO",
+            "company_id": cls.env.company.id,
+            "bank_account_id": cls.bank_account.id,
+        })
+        cls.qr_payment_method = cls.env["pos.payment.method"].create({
+            "name": "QR", "journal_id": cls.bank_journal.id, "payment_method_type": "qr_code",
+            "qr_code_method": "test_qr",
+            "receivable_account_id": cls.company_data["default_account_receivable"].id,
+        })
+        cls.pos_config_usd.write({"payment_method_ids": [Command.link(cls.qr_payment_method.id)]})
+        cls.product_80 = cls.env["product.product"].create({
+            "name": "Zmrzlina", "type": "consu", "list_price": 80.0, "available_in_pos": True, "taxes_id": [Command.clear()],
+        })
+        cls.product_77 = cls.env["product.product"].create({
+            "name": "Káva", "type": "consu", "list_price": 77.0, "available_in_pos": True, "taxes_id": [Command.clear()],
+        })
+        cls.currency_id = cls.env.company.currency_id.id
+
+    def _store(self, transactions):
+        items = fio_api.parse_transactions(fio_payload(transactions))
+        return self.bank_account._fio_store_transactions(items)
+
+    def _order(self, product, payment_method, pos_reference=None):
+        order_data = {"pos_reference": pos_reference} if pos_reference else {}
+        order, _refund = self.create_backend_pos_order({
+            "line_data": [{"product_id": product.id}],
+            "payment_data": [{"payment_method_id": payment_method.id}],
+            "order_data": order_data,
+        })
+        return order
+
+    # ------------------------------------------------------------------
+    def test_parse_transactions(self):
+        items = fio_api.parse_transactions(fio_payload([
+            fio_transaction(1, date(2026, 9, 12), 80.0, "Order 261-1-000005 5", vs="123"),
+            fio_transaction(2, date(2026, 9, 12), -50.0),
+        ]))
+        self.assertEqual(len(items), 2)
+        self.assertEqual(items[0]["fio_id"], "1")
+        self.assertEqual(items[0]["date"], date(2026, 9, 12))
+        self.assertEqual(items[0]["amount"], 80.0)
+        self.assertEqual(items[0]["variable_symbol"], "123")
+        self.assertEqual(items[0]["counter_name"], "Jan Novák")
+        self.assertEqual(items[0]["message"], "Order 261-1-000005 5")
+        self.assertEqual(items[1]["amount"], -50.0)
+        self.assertIsNone(items[1]["message"])
+        with self.assertRaises(fio_api.FioApiError):
+            fio_api.parse_transactions({"foo": 1})
+
+    def test_reference_keys_and_digit_boundary(self):
+        Transaction = self.env["fio.bank.transaction"]
+        self.assertEqual(Transaction._pos_reference_keys("Order 00275-006-0114"), {"order00275-006-0114", "00275-006-0114"})
+        self.assertEqual(Transaction._pos_reference_keys("Objednávka 00275-006-0114"), {"objednavka00275-006-0114", "00275-006-0114"})
+        self.assertEqual(Transaction._pos_reference_keys("261-1-000005"), {"261-1-000005"})
+        self.assertEqual(Transaction._pos_reference_keys(False), set())
+        tx = self._store([fio_transaction(10, date.today(), 1.0, "Order 261-1-000005 7")])
+        self.assertTrue(tx._text_matches_reference("261-1-000005"))
+        self.assertTrue(tx._text_matches_reference("Objednávka 261-1-000005"))
+        self.assertFalse(tx._text_matches_reference("61-1-000005"), "kratší číslo nesmí sedět na konec delšího")
+        self.assertFalse(tx._text_matches_reference("261-1-000006"))
+        tx_ident = self._store([fio_transaction(11, date.today(), 1.0, None, ident="OBJEDNÁVKA 00275-006-0114")])
+        self.assertTrue(tx_ident._text_matches_reference("Order 00275-006-0114"))
+
+    def test_qr_payment_pending_then_matched(self):
+        order = self._order(self.product_80, self.qr_payment_method, pos_reference="Order 261-1-000005")
+        payment = order.payment_ids
+        self.assertEqual(payment.fio_state, "pending")
+        cash_order = self._order(self.product_80, self.cash_payment_method)
+        self.assertEqual(cash_order.payment_ids.fio_state, "none")
+
+        txs = self._store([
+            fio_transaction(101, date.today(), order.amount_total, "Objednávka 261-1-000005 5"),
+            fio_transaction(102, date.today(), order.amount_total, "Order 999-9-999999 5"),
+            fio_transaction(103, date.today(), -12.0, "odchozí"),
+        ])
+        self.assertEqual(len(txs), 3)
+        txs._match_new()
+        self.assertEqual(payment.fio_state, "confirmed")
+        self.assertEqual(payment.fio_transaction_id, txs[0])
+        self.assertEqual(txs[0].match_type, "reference")
+        self.assertEqual(txs[1].state, "new")
+        self.assertEqual(txs[2].state, "new")
+        self.assertFalse(txs[2].is_incoming)
+        self.assertFalse(self._store([fio_transaction(101, date.today(), order.amount_total, "duplicita")]))
+
+        txs[0].action_reset()
+        self.assertEqual(txs[0].state, "new")
+        self.assertEqual(payment.fio_state, "pending")
+        self.assertFalse(payment.fio_transaction_id)
+
+        payment.action_fio_confirm_manual()
+        self.assertEqual(payment.fio_state, "manual")
+        self.env["fio.bank.transaction"]._match_pending()
+        self.assertEqual(payment.fio_state, "confirmed", "ručně potvrzenou platbu cron dopáruje")
+        self.assertEqual(payment.fio_transaction_id, txs[0])
+
+    def test_pos_check_reserves_transaction(self):
+        method = self.qr_payment_method
+        items = fio_api.parse_transactions(fio_payload([fio_transaction(201, date.today(), 77.0, "bez cisla")]))
+        with patch.object(fio_api, "fetch_last", return_value=items) as fetch_last:
+            res = method.fio_check_qr_payment(77.0, "Order 300-1-000001", self.currency_id)
+            self.assertTrue(res["enabled"])
+            self.assertTrue(res["confirmed"])
+            self.assertEqual(res["match_type"], "amount")
+            fetch_last.assert_called_once()
+            res2 = method.fio_check_qr_payment(77.0, "Order 300-1-000001", self.currency_id)
+            self.assertTrue(res2["confirmed"])
+            fetch_last.assert_called_once()  # do 30 s se Fio znovu nevolá
+            res3 = method.fio_check_qr_payment(77.0, "Order 300-1-000002", self.currency_id)
+            self.assertFalse(res3["confirmed"], "rezervovaný pohyb nedostane jiná objednávka")
+            self.assertGreater(res3["next_check_in"], 0)
+        tx = self.env["fio.bank.transaction"].browse(res["transaction_id"])
+        self.assertEqual(tx.reserved_reference, "Order 300-1-000001")
+        self.assertEqual(tx.state, "new")
+
+        order = self._order(self.product_77, method, pos_reference="Order 300-1-000001")
+        payment = order.payment_ids
+        self.assertEqual(payment.fio_state, "confirmed", "uložení objednávky spáruje rezervovaný pohyb")
+        self.assertEqual(payment.fio_transaction_id, tx)
+        self.assertEqual(tx.match_type, "amount")
+        self.assertFalse(tx.reserved_reference)
+
+    def test_pos_check_disabled_without_token(self):
+        self.bank_account.fio_api_token = False
+        self.assertEqual(
+            self.qr_payment_method.fio_check_qr_payment(1.0, "Order 1-1-000001", self.currency_id),
+            {"enabled": False},
+        )
+
+    def test_rate_limit_and_errors(self):
+        bank = self.bank_account
+        bank.fio_last_request_at = fields.Datetime.now()
+        self.assertGreater(bank._fio_seconds_until_allowed(), 0)
+        with patch.object(fio_api, "fetch_last") as fetch_last:
+            self.assertFalse(bank.fio_sync_recent())
+            fetch_last.assert_not_called()
+        bank.fio_last_request_at = fields.Datetime.now() - timedelta(seconds=31)
+        self.assertEqual(bank._fio_seconds_until_allowed(), 0)
+        with patch.object(fio_api, "fetch_last", side_effect=fio_api.FioRateLimitError("HTTP 409")):
+            self.assertFalse(bank.fio_sync_recent())
+        self.assertIn("409", bank.fio_last_error)
+        bank.fio_last_request_at = False
+        with patch.object(fio_api, "fetch_last", return_value=[]):
+            self.assertTrue(bank.fio_sync_recent())
+        self.assertFalse(bank.fio_last_error)
+        with self.assertRaises(UserError):
+            bank.action_fio_fetch_now()  # hned po dotazu: limit 30 s
+
+    def test_invoice_matched_by_variable_symbol(self):
+        partner = self.env["res.partner"].create({"name": "Zákazník s fakturou"})
+        invoice = self.env["account.move"].create({
+            "move_type": "out_invoice", "partner_id": partner.id, "invoice_date": date.today(),
+            "invoice_line_ids": [Command.create({"name": "Zmrzlina na akci", "quantity": 1, "price_unit": 250.0})],
+        })
+        invoice.action_post()
+        vs = "".join(ch for ch in invoice.payment_reference if ch.isdigit())
+        self.assertTrue(vs)
+        currency = invoice.currency_id.name  # testovací firma neúčtuje v CZK; jiná měna by platbu nezaregistrovala
+        tx = self._store([fio_transaction(301, date.today(), invoice.amount_total, "platba faktury", vs=vs, currency=currency)])
+        tx._match_new()
+        self.assertEqual(tx.state, "matched")
+        self.assertEqual(tx.match_type, "variable_symbol")
+        self.assertEqual(tx.move_id, invoice)
+        self.assertEqual(tx.payment_id.journal_id, self.bank_journal)
+        self.assertEqual(tx.payment_id.amount, invoice.amount_total)
+        self.assertEqual(tx.payment_id.fio_transaction_id, tx)
+        self.assertIn(invoice.payment_state, ("paid", "in_payment"))
+        self.assertEqual(invoice.fio_transaction_count, 1)
+
+        tx2 = self._store([fio_transaction(302, date.today(), invoice.amount_total, "faktura znovu", vs=vs, currency=currency)])
+        tx2._match_new()
+        self.assertEqual(tx2.state, "matched", "už uhrazená faktura se jen propojí")
+        self.assertFalse(tx2.payment_id)
+        self.assertTrue(tx2.note)
+
+        tx3 = self._store([fio_transaction(303, date.today(), 10.0, "neznámý VS", vs="999999999", currency=currency)])
+        tx3._match_new()
+        self.assertEqual(tx3.state, "new")
+
+    def test_invoice_other_currency_links_without_payment(self):
+        partner = self.env["res.partner"].create({"name": "Zákazník v cizí měně"})
+        invoice = self.env["account.move"].create({
+            "move_type": "out_invoice", "partner_id": partner.id, "invoice_date": date.today(),
+            "invoice_line_ids": [Command.create({"name": "Služba", "quantity": 1, "price_unit": 100.0})],
+        })
+        invoice.action_post()
+        vs = "".join(ch for ch in invoice.payment_reference if ch.isdigit())
+        other = "CZK" if invoice.currency_id.name != "CZK" else "EUR"
+        tx = self._store([fio_transaction(311, date.today(), invoice.amount_total, "cizí měna", vs=vs, currency=other)])
+        tx._match_new()
+        self.assertEqual(tx.state, "matched")
+        self.assertEqual(tx.move_id, invoice)
+        self.assertFalse(tx.payment_id)
+        self.assertEqual(invoice.payment_state, "not_paid")
+
+    def test_manual_match_wizard_and_ignore(self):
+        order = self._order(self.product_80, self.qr_payment_method, pos_reference="Order 261-1-000009")
+        payment = order.payment_ids
+        tx = self._store([fio_transaction(401, date.today(), order.amount_total, "bez odkazu")])
+        tx._match_new()
+        self.assertEqual(tx.state, "new", "cron bez čísla objednávky nepáruje jen podle částky")
+
+        wizard = self.env["fio.match.wizard"].with_context(default_transaction_id=tx.id).create({})
+        wizard._onchange_transaction_id()
+        self.assertEqual(wizard.pos_payment_id, payment, "jediná čekající platba ve stejné částce se předvyplní")
+        wizard.action_confirm()
+        self.assertEqual(tx.match_type, "manual")
+        self.assertEqual(payment.fio_state, "confirmed")
+        with self.assertRaises(UserError):
+            tx.action_ignore()
+
+        payment.action_fio_reset_pending()
+        self.assertEqual(payment.fio_state, "pending")
+        self.assertEqual(tx.state, "new")
+        tx.action_ignore()
+        self.assertEqual(tx.state, "ignored")
+        payment.action_fio_ignore()
+        self.assertEqual(payment.fio_state, "ignored")
+
+    def test_history_import_steps(self):
+        bank = self.bank_account
+        Bank = self.env["res.partner.bank"]
+        calls, set_last = [], []
+
+        def fetch_periods(token, day_from, day_to):
+            calls.append((day_from, day_to))
+            return fio_api.parse_transactions(fio_payload([
+                fio_transaction(500 + len(calls), day_from, 1.0, f"historie {len(calls)}"),
+            ]))
+
+        bank.write({"fio_history_from": date.today() - timedelta(days=200)})
+        with patch.object(fio_api, "fetch_periods", side_effect=fetch_periods), \
+             patch.object(fio_api, "set_last_id", side_effect=lambda token, fio_id: set_last.append(fio_id)):
+            bank.action_fio_import_history()
+            self.assertTrue(bank.fio_history_running)
+            for _step in range(3):
+                bank.fio_last_request_at = False  # jako by uplynulo 30 s
+                Bank._cron_fio_history_step()
+            self.assertFalse(bank.fio_history_running)
+            self.assertEqual(len(calls), 3, "200 dní = tři bloky po 90 dnech")
+            self.assertEqual(calls[0][0], date.today() - timedelta(days=200))
+            self.assertEqual(calls[1][0], calls[0][1] + timedelta(days=1))
+            self.assertEqual(calls[-1][1], date.today())
+            self.assertEqual(bank.fio_history_set_last_id, "503")
+            bank.fio_last_request_at = False
+            Bank._cron_fio_history_step()
+            self.assertEqual(set_last, ["503"])
+            self.assertFalse(bank.fio_history_set_last_id)
+        stored = self.env["fio.bank.transaction"].search([
+            ("bank_account_id", "=", bank.id), ("fio_id", "in", ["501", "502", "503"]),
+        ])
+        self.assertEqual(len(stored), 3)
+
+    def test_hourly_cron_syncs_and_matches(self):
+        order = self._order(self.product_80, self.qr_payment_method, pos_reference="Order 261-1-000077")
+        payment = order.payment_ids
+        items = fio_api.parse_transactions(fio_payload([
+            fio_transaction(601, date.today(), order.amount_total, "Order 261-1-000077 3"),
+        ]))
+        with patch.object(fio_api, "fetch_last", return_value=items):
+            self.env["res.partner.bank"]._cron_fio_sync()
+        self.assertEqual(payment.fio_state, "confirmed")
+        self.assertEqual(payment.fio_transaction_id.fio_id, "601")

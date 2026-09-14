@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates id="template" xml:space="preserve">
+
+    <t t-name="fio_qr_payment_validation.QRConfirmationDialog" t-inherit="point_of_sale.QRConfirmationDialog" t-inherit-mode="extension">
+        <xpath expr="//img[@alt='QR Code']" position="attributes">
+            <attribute name="t-if">fio.status !== 'confirmed'</attribute>
+        </xpath>
+        <xpath expr="//img[@alt='QR Code']" position="after">
+            <div t-if="fio.status === 'confirmed'" class="fio_qr_confirmed alert alert-success text-center my-2 px-4 py-3">
+                <i class="fa fa-check-circle fa-3x d-block mb-2" role="img" aria-label="Potvrzeno"/>
+                <div class="h4 mb-1">Automaticky potvrzeno</div>
+                <div t-if="fio.detail" class="small" t-out="fio.detail"/>
+                <div class="small text-muted mt-1">Objednávka se za chvíli dokončí sama.</div>
+            </div>
+            <div t-elif="fio.status === 'checking'" class="fio_qr_checking small text-muted mt-2">
+                <i class="fa fa-refresh fa-spin me-1" role="img" aria-label="Kontrola"/>Čekám na platbu v bance…
+            </div>
+            <div t-elif="fio.status === 'error'" class="fio_qr_error small text-warning mt-2" t-out="fio.detail"/>
+        </xpath>
+    </t>
+
+</templates>

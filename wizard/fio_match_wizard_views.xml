@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_fio_match_wizard_form" model="ir.ui.view">
+        <field name="name">fio.match.wizard.form</field>
+        <field name="model">fio.match.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Ručně spárovat pohyb">
+                <group>
+                    <field name="transaction_id"/>
+                    <field name="currency_id" invisible="1"/>
+                    <field name="amount"/>
+                    <field name="target" widget="radio" options="{'horizontal': true}"/>
+                    <field name="pos_payment_id" invisible="target != 'pos'" required="target == 'pos'"/>
+                    <field name="move_id" invisible="target != 'invoice'" required="target == 'invoice'"/>
+                    <field name="register_payment" invisible="target != 'invoice'"/>
+                </group>
+                <footer>
+                    <button name="action_confirm" type="object" string="Spárovat" class="btn-primary"/>
+                    <button string="Zrušit" special="cancel" class="btn-secondary"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+</odoo>

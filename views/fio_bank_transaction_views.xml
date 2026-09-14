@@ -1,0 +1,139 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_fio_bank_transaction_list" model="ir.ui.view">
+        <field name="name">fio.bank.transaction.list</field>
+        <field name="model">fio.bank.transaction</field>
+        <field name="arch" type="xml">
+            <list string="Pohyby Fio" create="0"
+                  decoration-success="state == 'matched'"
+                  decoration-muted="state == 'ignored' or not is_incoming"
+                  decoration-warning="state == 'new' and is_incoming">
+                <field name="currency_id" column_invisible="True"/>
+                <field name="is_incoming" column_invisible="True"/>
+                <field name="date"/>
+                <field name="amount" sum="Celkem"/>
+                <field name="counter_name"/>
+                <field name="message"/>
+                <field name="variable_symbol" optional="show"/>
+                <field name="user_identification" optional="hide"/>
+                <field name="counter_account" optional="hide"/>
+                <field name="transaction_type" optional="hide"/>
+                <field name="state" widget="badge"
+                       decoration-success="state == 'matched'"
+                       decoration-warning="state == 'new'"
+                       decoration-muted="state == 'ignored'"/>
+                <field name="match_type" optional="show"/>
+                <field name="pos_order_id" optional="show"/>
+                <field name="move_id" optional="show"/>
+                <field name="note" optional="hide"/>
+                <button name="action_open_match_wizard" type="object" icon="fa-link" title="Ručně spárovat"
+                        invisible="state != 'new' or not is_incoming"/>
+                <button name="action_ignore" type="object" icon="fa-ban" title="Ignorovat"
+                        invisible="state != 'new'"/>
+                <button name="action_reset" type="object" icon="fa-undo" title="Zrušit spárování / ignorování"
+                        invisible="state == 'new'"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_fio_bank_transaction_form" model="ir.ui.view">
+        <field name="name">fio.bank.transaction.form</field>
+        <field name="model">fio.bank.transaction</field>
+        <field name="arch" type="xml">
+            <form string="Pohyb Fio" create="0">
+                <header>
+                    <button name="action_open_match_wizard" type="object" string="Ručně spárovat" class="btn-primary"
+                            invisible="state != 'new' or not is_incoming"/>
+                    <button name="action_ignore" type="object" string="Ignorovat"
+                            invisible="state != 'new'"/>
+                    <button name="action_reset" type="object" string="Zrušit spárování / ignorování"
+                            invisible="state == 'new'"
+                            confirm="Pohyb se vrátí mezi nespárované. Platba v pokladně se vrátí ke kontrole; platba zaregistrovaná na faktuře zůstane, případně ji zruš ručně."/>
+                    <field name="state" widget="statusbar" statusbar_visible="new,matched"/>
+                </header>
+                <sheet>
+                    <div class="oe_title">
+                        <h1><field name="display_name" readonly="1"/></h1>
+                    </div>
+                    <group>
+                        <group string="Pohyb">
+                            <field name="bank_account_id"/>
+                            <field name="date"/>
+                            <field name="amount"/>
+                            <field name="currency_id"/>
+                            <field name="is_incoming"/>
+                            <field name="transaction_type"/>
+                            <field name="fio_id"/>
+                        </group>
+                        <group string="Plátce">
+                            <field name="counter_name"/>
+                            <field name="counter_account"/>
+                            <field name="counter_bank_code"/>
+                            <field name="bic"/>
+                            <field name="variable_symbol"/>
+                            <field name="constant_symbol"/>
+                            <field name="specific_symbol"/>
+                        </group>
+                    </group>
+                    <group string="Texty">
+                        <field name="message"/>
+                        <field name="user_identification"/>
+                        <field name="specification"/>
+                        <field name="comment"/>
+                    </group>
+                    <group string="Spárování">
+                        <field name="match_type"/>
+                        <field name="pos_payment_id"/>
+                        <field name="pos_order_id"/>
+                        <field name="move_id"/>
+                        <field name="payment_id"/>
+                        <field name="reserved_reference" invisible="not reserved_reference"/>
+                        <field name="note"/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="view_fio_bank_transaction_search" model="ir.ui.view">
+        <field name="name">fio.bank.transaction.search</field>
+        <field name="model">fio.bank.transaction</field>
+        <field name="arch" type="xml">
+            <search string="Pohyby Fio">
+                <field name="message" string="Zpráva / identifikace"
+                       filter_domain="['|', '|', ('message', 'ilike', self), ('user_identification', 'ilike', self), ('comment', 'ilike', self)]"/>
+                <field name="counter_name"/>
+                <field name="counter_account"/>
+                <field name="variable_symbol"/>
+                <field name="amount"/>
+                <field name="pos_order_id"/>
+                <field name="move_id"/>
+                <filter name="unmatched" string="Nespárované příchozí" domain="[('state', '=', 'new'), ('amount', '>', 0)]"/>
+                <filter name="matched" string="Spárované" domain="[('state', '=', 'matched')]"/>
+                <filter name="ignored" string="Ignorované" domain="[('state', '=', 'ignored')]"/>
+                <separator/>
+                <filter name="incoming" string="Příchozí" domain="[('amount', '>', 0)]"/>
+                <filter name="outgoing" string="Odchozí" domain="[('amount', '&lt;', 0)]"/>
+                <separator/>
+                <filter name="filter_date" string="Datum" date="date"/>
+                <group>
+                    <filter name="group_state" string="Stav" context="{'group_by': 'state'}"/>
+                    <filter name="group_match_type" string="Způsob spárování" context="{'group_by': 'match_type'}"/>
+                    <filter name="group_month" string="Měsíc" context="{'group_by': 'date:month'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="action_fio_bank_transaction" model="ir.actions.act_window">
+        <field name="name">Pohyby Fio</field>
+        <field name="res_model">fio.bank.transaction</field>
+        <field name="view_mode">list,form</field>
+        <field name="context">{'search_default_unmatched': 1}</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">Zatím žádné pohyby z Fio</p>
+            <p>Vyplň Fio API token na bankovním účtu (Fakturace › Konfigurace › Bankovní účty, záložka Fio)
+               a stáhni nové pohyby nebo historii.</p>
+        </field>
+    </record>
+</odoo>

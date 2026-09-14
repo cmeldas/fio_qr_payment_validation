@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_partner_bank_form_inherit_fio" model="ir.ui.view">
+        <field name="name">res.partner.bank.form.fio</field>
+        <field name="model">res.partner.bank</field>
+        <field name="inherit_id" ref="base.view_partner_bank_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//notebook" position="inside">
+                <page string="Fio" name="fio" groups="base.group_system">
+                    <group>
+                        <group string="Napojení na Fio">
+                            <field name="fio_api_token" password="True"/>
+                            <field name="fio_enabled"/>
+                            <field name="fio_last_sync_at"/>
+                            <field name="fio_last_request_at"/>
+                            <field name="fio_last_error" invisible="not fio_last_error" class="text-danger"/>
+                            <field name="fio_transaction_count"/>
+                        </group>
+                        <group string="Historie pohybů">
+                            <field name="fio_history_from"/>
+                            <field name="fio_history_cursor" invisible="not fio_history_cursor"/>
+                            <field name="fio_history_running"/>
+                        </group>
+                    </group>
+                    <div class="d-flex flex-wrap gap-2">
+                        <button name="action_fio_fetch_now" type="object" string="Načíst nové pohyby" class="btn btn-primary"
+                                invisible="not fio_enabled"/>
+                        <button name="action_fio_match_pending" type="object" string="Spárovat čekající" class="btn btn-secondary"/>
+                        <button name="action_fio_import_history" type="object" string="Načíst historii" class="btn btn-secondary"
+                                invisible="not fio_enabled or fio_history_running"
+                                confirm="Historie se stáhne po 90 dnech s pauzou 35 s mezi bloky (limit Fio: jeden dotaz za 30 s). Pokračovat?"/>
+                        <button name="action_fio_stop_history" type="object" string="Zastavit import" class="btn btn-warning"
+                                invisible="not fio_history_running"/>
+                        <button name="action_fio_open_transactions" type="object" string="Zobrazit pohyby" class="btn btn-link"/>
+                    </div>
+                    <p class="text-muted mt-3">
+                        Token se vydává v internetovém bankovnictví Fio (Nastavení › API) k jednomu účtu, stačí práva
+                        „pouze sledovat“. Fio dovolí jeden dotaz za 30 sekund, modul limit hlídá sám.
+                    </p>
+                </page>
+            </xpath>
+        </field>
+    </record>
+</odoo>
