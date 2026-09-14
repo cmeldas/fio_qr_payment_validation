@@ -168,6 +168,33 @@ class TestFioMatching(CommonPosTest):
         self.assertEqual(payment.fio_transaction_id, txs[1])
         self.assertEqual(txs[0].state, "new")
 
+    def test_pos_client_does_not_load_fio_fields(self):
+        """Pokladna Odoo 19 posílá při uložení všechna načtená pole platby; stav ověření musí zůstat jen na serveru."""
+        fields_list = self.env["pos.payment"]._load_pos_data_fields(self.pos_config_usd)
+        self.assertIn("amount", fields_list)
+        self.assertIn("payment_method_id", fields_list)
+        self.assertIn("pos_order_id", fields_list)
+        for name in ("fio_state", "fio_transaction_id", "fio_confirmed_at", "fio_match_type", "fio_tip_amount", "pos_reference"):
+            self.assertNotIn(name, fields_list)
+
+    def test_create_with_empty_fio_state_from_client(self):
+        """Objednávka uložená pokladnou z doby před aktualizací pošle fio_state=False – nesmí spadnout."""
+        order = self._order(self.product_80, self.cash_payment_method)
+        Payment = self.env["pos.payment"]
+        qr = Payment.create({
+            "pos_order_id": order.id, "session_id": order.session_id.id,
+            "payment_method_id": self.qr_payment_method.id, "amount": 1.0, "fio_state": False,
+        })
+        self.assertEqual(qr.fio_state, "pending")
+        cash = Payment.create({
+            "pos_order_id": order.id, "session_id": order.session_id.id,
+            "payment_method_id": self.cash_payment_method.id, "amount": 1.0, "fio_state": False,
+        })
+        self.assertEqual(cash.fio_state, "none")
+        qr.write({"fio_state": False, "amount": 2.0})
+        self.assertEqual(qr.fio_state, "pending")
+        self.assertEqual(qr.amount, 2.0)
+
     def test_exact_amount_without_tip(self):
         order = self._order(self.product_80, self.qr_payment_method, pos_reference="Order 261-1-000006")
         tx = self._store([fio_transaction(110, date.today(), order.amount_total, "Order 261-1-000006 6")])

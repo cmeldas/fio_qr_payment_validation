@@ -9,6 +9,13 @@ FIO_STATES = [
     ("ignored", "Ignorováno"),
 ]
 
+# Pole, která pokladna nemá načítat: Odoo 19 posílá pokladně u plateb všechna pole a při
+# uložení objednávky je vrací (nová platba by přišla s fio_state=False a spadla na NOT NULL;
+# stav ověření patří jen serveru).
+FIO_SERVER_ONLY_FIELDS = (
+    "fio_state", "fio_transaction_id", "fio_confirmed_at", "fio_match_type", "fio_tip_amount", "pos_reference",
+)
+
 
 class PosPayment(models.Model):
     _inherit = "pos.payment"
@@ -29,14 +36,32 @@ class PosPayment(models.Model):
         method = self.payment_method_id
         return method.payment_method_type == "qr_code" or bool(method.qr_code_method)
 
+    @api.model
+    def _load_pos_data_fields(self, config):
+        """Pokladna dostane všechna pole platby kromě těch, která řeší jen server (viz FIO_SERVER_ONLY_FIELDS)."""
+        fields_list = super()._load_pos_data_fields(config) or list(self.fields_get(attributes=[]))
+        return [name for name in fields_list if name not in FIO_SERVER_ONLY_FIELDS]
+
+    @api.model
+    def _fio_sanitize_vals(self, vals):
+        """Prázdný stav ověření z pokladny (objednávky uložené před aktualizací) nechá na výchozí hodnotě."""
+        if "fio_state" in vals and not vals["fio_state"]:
+            vals.pop("fio_state")
+        return vals
+
     @api.model_create_multi
     def create(self, vals_list):
+        for vals in vals_list:
+            self._fio_sanitize_vals(vals)
         payments = super().create(vals_list)
         for payment in payments:
             if payment.fio_state == "none" and payment._is_fio_qr_payment() and not payment.is_change:
                 payment.fio_state = "pending"
                 payment._fio_try_match()
         return payments
+
+    def write(self, vals):
+        return super().write(self._fio_sanitize_vals(dict(vals)))
 
     def _fio_try_match(self):
         """Po uložení objednávky zkusí najít už stažený pohyb (rozpoznaný při otevřeném QR nebo cronem).

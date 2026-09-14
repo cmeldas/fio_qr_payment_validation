@@ -119,6 +119,11 @@ v poli „Poslední chyba Fio“:
   zákaznickém displeji (bundle `point_of_sale.customer_display_assets`).
 - Instalace (`post_init_hook`): všechny dosavadní QR platby → *Čeká na banku*; „Historie od“
   na účtu deníku QR metody.
+- Pokladna Odoo 19 načítá u `pos.payment` **všechna pole** (`_load_pos_data_fields` vrací `[]`)
+  a při uložení objednávky je posílá zpět – nová platba by přišla s `fio_state = False` a spadla
+  na povinném poli. Modul proto pole `fio_*` a `pos_reference` z načítání do pokladny vyřazuje
+  a prázdný `fio_state` v `create`/`write` ignoruje (objednávky uložené v prohlížeči před
+  aktualizací se tak dosynchronizují).
 - Závislosti: `point_of_sale`, `account`; Python `requests` (součást Odoo).
 
 ## Testy
