@@ -72,6 +72,17 @@
         <field name="arch" type="xml">
             <list string="QR platby ke kontrole" create="0" delete="0" default_order="payment_date desc"
                   decoration-warning="fio_state == 'pending'" decoration-muted="fio_state == 'ignored'">
+                <!-- hromadné akce nad vybranými řádky (jen platby ve stavu Čeká na banku se změní) -->
+                <header>
+                    <button name="action_fio_confirm_manual" type="object" string="Potvrdit ručně" class="btn-primary"
+                            groups="point_of_sale.group_pos_manager"
+                            confirm="Vybrané platby ve stavu „Čeká na banku“ se označí jako ručně potvrzené (zkontrolované jinak). Cron je dál zkouší spárovat s bankou. Pokračovat?"/>
+                    <button name="action_fio_ignore" type="object" string="Ignorovat"
+                            groups="point_of_sale.group_pos_manager"
+                            confirm="Vybrané platby ve stavu „Čeká na banku“ se vyřadí z kontroly. Pokračovat?"/>
+                    <button name="action_fio_reset_pending" type="object" string="Vrátit ke kontrole"
+                            groups="point_of_sale.group_pos_manager"/>
+                </header>
                 <field name="currency_id" column_invisible="True"/>
                 <field name="payment_date"/>
                 <field name="pos_order_id"/>

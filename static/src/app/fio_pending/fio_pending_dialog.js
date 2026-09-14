@@ -4,15 +4,15 @@ import { usePos } from "@point_of_sale/app/hooks/pos_hook";
 import { deserializeDateTime } from "@web/core/l10n/dates";
 import { _t } from "@web/core/l10n/translation";
 
-/** Jak často se překresluje odpočet do dalšího možného dotazu na banku. */
+/** Jak často se překresluje odpočet a kontroluje, zda už je čas na další stažení z banky. */
 const TICK_MS = 250;
 
 /**
  * Seznam QR plateb, které banka ještě nepotvrdila (stav „Čeká na banku“), pro obsluhu
- * pokladny: datum a čas, číslo objednávky, částka, proklik na objednávku v seznamu účtenek,
- * dýška za dnešek a tlačítko „Načíst platby z banky“ s ukazatelem, za jak dlouho Fio dovolí
- * další dotaz (během limitu se načtení odloží a proběhne samo). Data čte přímo
- * z `pos.fioPending`, takže se seznam po načtení z banky sám překreslí.
+ * pokladny: datum a čas, číslo objednávky, částka, proklik na objednávku v seznamu účtenek
+ * a dýška za dnešek. Dokud je popup otevřený, stahuje pohyby z banky tak rychle, jak Fio dovolí
+ * (jednou za 30 s) – ukazatel odpočítává do dalšího stažení. Data čte přímo z `pos.fioPending`,
+ * takže se seznam po každém stažení sám překreslí.
  */
 export class FioPendingDialog extends Component {
     static template = "fio_qr_payment_validation.FioPendingDialog";
@@ -27,6 +27,9 @@ export class FioPendingDialog extends Component {
         onMounted(() => {
             ticker = setInterval(() => {
                 this.clock.now = Date.now();
+                if (this.pending.bankEnabled && !this.pending.loading && this.remainingMs <= 0) {
+                    this.pos.fioRefreshFromBank();
+                }
             }, TICK_MS);
         });
         onWillUnmount(() => clearInterval(ticker));
@@ -40,7 +43,7 @@ export class FioPendingDialog extends Component {
         return Math.max(0, this.pending.nextAllowedAt - this.clock.now);
     }
 
-    /** Šířka ukazatele: 100 % hned po dotazu na banku, 0 % když je další dotaz možný. */
+    /** Šířka ukazatele: 100 % hned po stažení z banky, 0 % ve chvíli dalšího stažení. */
     get progressPercent() {
         const total = (this.pending.rateLimit || 30) * 1000;
         return Math.min(100, Math.round((this.remainingMs / total) * 100));
@@ -51,12 +54,7 @@ export class FioPendingDialog extends Component {
         if (this.pending.loading) {
             return _t("Načítám z banky…");
         }
-        if (seconds <= 0) {
-            return _t("Banka je připravená na další dotaz.");
-        }
-        return this.pending.autoRefresh
-            ? _t("Načtu automaticky za %s s.", seconds)
-            : _t("Banka dovolí další dotaz za %s s.", seconds);
+        return seconds > 0 ? _t("Další načtení z banky za %s s", seconds) : _t("Načítám z banky…");
     }
 
     formatDate(value) {
@@ -69,10 +67,6 @@ export class FioPendingDialog extends Component {
 
     orderLabel(row) {
         return row.pos_reference || row.order_name || row.tracking_number || "";
-    }
-
-    async refreshFromBank() {
-        await this.pos.fioRefreshFromBank();
     }
 
     /** Přehled všech dýšek po dnech (administrace) v nové záložce. */

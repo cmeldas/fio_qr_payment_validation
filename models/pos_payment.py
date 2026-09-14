@@ -205,16 +205,22 @@ class PosPayment(models.Model):
         return total or 0.0, count or 0
 
     def action_fio_confirm_manual(self):
-        self.write({"fio_state": "manual", "fio_confirmed_at": fields.Datetime.now()})
+        """Ručně potvrzeno (zkontrolováno jinak). Hromadně bezpečné: platby potvrzené bankou se nemění."""
+        self.filtered(lambda p: p.fio_state in ("pending", "ignored")).write({
+            "fio_state": "manual", "fio_confirmed_at": fields.Datetime.now(),
+        })
         return True
 
     def action_fio_ignore(self):
-        self.write({"fio_state": "ignored"})
+        """Vyřadit z kontroly. Hromadně bezpečné: mění jen platby čekající na banku."""
+        self.filtered(lambda p: p.fio_state == "pending").write({"fio_state": "ignored"})
         return True
 
     def action_fio_reset_pending(self):
-        for payment in self:
+        """Vrátit ke kontrole; u platby potvrzené bankou se zruší i spárování pohybu."""
+        payments = self.filtered(lambda p: p.fio_state in ("confirmed", "manual", "ignored"))
+        for payment in payments:
             if payment.fio_transaction_id:
                 payment.fio_transaction_id.sudo().action_reset()
-        self.write({"fio_state": "pending", "fio_transaction_id": False, "fio_confirmed_at": False})
+        payments.write({"fio_state": "pending", "fio_transaction_id": False, "fio_confirmed_at": False})
         return True

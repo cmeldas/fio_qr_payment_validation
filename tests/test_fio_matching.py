@@ -528,6 +528,26 @@ class TestFioMatching(CommonPosTest):
         cron = self.env.ref("fio_qr_payment_validation.cron_fio_sync")
         self.assertEqual((cron.interval_number, cron.interval_type), (5, "minutes"))
 
+    def test_bulk_actions_touch_only_pending(self):
+        order_a = self._order(self.product_80, self.qr_payment_method, pos_reference="Order 261-1-000101")
+        order_b = self._order(self.product_80, self.qr_payment_method, pos_reference="Order 261-1-000102")
+        pending, confirmed = order_a.payment_ids, order_b.payment_ids
+        tx = self._store([fio_transaction(901, date.today(), order_b.amount_total, "Order 261-1-000102 2")])
+        tx._match_new()
+        self.assertEqual(confirmed.fio_state, "confirmed")
+        both = pending | confirmed
+        both.action_fio_confirm_manual()
+        self.assertEqual(pending.fio_state, "manual")
+        self.assertEqual(confirmed.fio_state, "confirmed", "hromadné potvrzení nesmí přepsat platbu potvrzenou bankou")
+        both.action_fio_reset_pending()
+        self.assertEqual((pending.fio_state, confirmed.fio_state), ("pending", "pending"))
+        self.assertEqual(tx.state, "new")
+        both.action_fio_ignore()
+        self.assertEqual((pending.fio_state, confirmed.fio_state), ("ignored", "ignored"))
+        both.action_fio_ignore()  # znovu: nic se nerozbije
+        (pending | confirmed).action_fio_confirm_manual()
+        self.assertEqual(pending.fio_state, "manual", "ignorovanou lze ručně potvrdit")
+
     def test_refresh_from_bank_button(self):
         Payment = self.env["pos.payment"]
         config = self.pos_config_usd
