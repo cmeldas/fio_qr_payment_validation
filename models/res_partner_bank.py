@@ -11,8 +11,13 @@ from . import fio_api
 
 _logger = logging.getLogger(__name__)
 
-HISTORY_CHUNK_DAYS = 90
+# Fio pouští data starší 90 dní jen po silné autorizaci v internetbankingu, a to na 10 minut.
+# Proto co nejméně dotazů: roční bloky (limit Fio je 50 000 pohybů na dotaz), mezi nimi 35 s.
+HISTORY_CHUNK_DAYS = 365
 HISTORY_STEP_DELAY_SECONDS = 35
+# Nový token nemá zarážku pro `last` a Fio by sáhlo do celé historie (HTTP 422);
+# první stažení proto napřed nastaví zarážku takto daleko zpět (musí být pod 90 dní).
+LAST_INIT_DAYS = 85
 
 
 class ResPartnerBank(models.Model):
@@ -38,6 +43,12 @@ class ResPartnerBank(models.Model):
     fio_history_set_last_id = fields.Char(
         string="Zarážka k nastavení", readonly=True, copy=False,
         help="Interní: po importu historie se na Fio nastaví zarážka `last` za tento pohyb.",
+    )
+    fio_bookmark_set = fields.Boolean(
+        string="Zarážka `last` nastavena", readonly=True, copy=False,
+        help="Fio si u tokenu pamatuje, odkud posílat nové pohyby. Bez zarážky by první stažení "
+        "sáhlo do celé historie a Fio ho odmítne (HTTP 422); modul ji proto před prvním stažením "
+        "nastaví 85 dní zpět, nebo za poslední pohyb po importu historie.",
     )
     fio_transaction_count = fields.Integer(string="Pohybů", compute="_compute_fio_transaction_count")
 
@@ -126,14 +137,29 @@ class ResPartnerBank(models.Model):
             _logger.info("Fio %s: uloženo %s nových pohybů", self.display_name, len(created))
         return created
 
+    def _fio_init_bookmark(self):
+        """První kontakt s tokenem: nastaví zarážku `last` 85 dní zpět. Vrací True při úspěchu."""
+        self.ensure_one()
+        bank = self.sudo()
+        since = fields.Date.context_today(self) - timedelta(days=LAST_INIT_DAYS)
+        if self._fio_call(fio_api.set_last_date, since) is None:
+            return False
+        bank.fio_bookmark_set = True
+        _logger.info("Fio %s: zarážka `last` nastavena na %s", self.display_name, since)
+        return True
+
     def fio_sync_recent(self):
         """Stáhne nové pohyby (`last`) a spáruje je. Vrací True, když dotaz na Fio proběhl.
 
         Respektuje limit 30 s; když teď volat nelze nebo účet právě dotazuje jiný požadavek,
-        nic nestahuje a vrátí False (párování dál běží nad už uloženými pohyby).
+        nic nestahuje a vrátí False (párování dál běží nad už uloženými pohyby). U tokenu bez
+        zarážky ji napřed nastaví (jeden dotaz) a samotné stažení nechá na příští volání.
         """
         self.ensure_one()
         if not self.sudo().fio_api_token or not self._fio_try_lock():
+            return False
+        if not self.sudo().fio_bookmark_set:
+            self._fio_init_bookmark()
             return False
         items = self._fio_call(fio_api.fetch_last)
         if items is None:
@@ -151,6 +177,20 @@ class ResPartnerBank(models.Model):
             wait = bank._fio_seconds_until_allowed()
             if wait:
                 raise UserError(_("Fio dovolí jeden dotaz za 30 sekund, zkus to znovu za %s s.", wait))
+            if not bank.sudo().fio_bookmark_set:
+                if not bank._fio_init_bookmark():
+                    raise UserError(bank.sudo().fio_last_error or _("Nastavení zarážky na Fio se nepovedlo, viz log serveru."))
+                return {
+                    "type": "ir.actions.client",
+                    "tag": "display_notification",
+                    "params": {
+                        "type": "info",
+                        "title": _("Zarážka nastavena"),
+                        "message": _("Fio bude posílat pohyby od %s. Za 30 s klikni znovu na „Načíst nové pohyby“.",
+                                     fields.Date.context_today(self) - timedelta(days=LAST_INIT_DAYS)),
+                        "sticky": False,
+                    },
+                }
             if not bank.fio_sync_recent():
                 raise UserError(bank.sudo().fio_last_error or _("Stažení z Fio se nepovedlo, viz log serveru."))
         self.env["fio.bank.transaction"].sudo()._match_pending()
@@ -170,6 +210,9 @@ class ResPartnerBank(models.Model):
                 raise UserError(_("Účet %s nemá vyplněný Fio API token.", bank.display_name))
             if not bank.fio_history_from:
                 raise UserError(_("Vyplň „Historie od“."))
+            wait = bank._fio_seconds_until_allowed()
+            if wait:
+                raise UserError(_("Fio dovolí jeden dotaz za 30 sekund, zkus to znovu za %s s.", wait))
             bank.sudo().write({
                 "fio_history_cursor": bank.fio_history_from - timedelta(days=1),
                 "fio_history_running": True,
@@ -201,8 +244,11 @@ class ResPartnerBank(models.Model):
                 again = True
                 continue
             if bank._fio_call(fio_api.set_last_id, bank.fio_history_set_last_id):
-                bank.fio_history_set_last_id = False
+                bank.write({"fio_history_set_last_id": False, "fio_bookmark_set": True})
                 _logger.info("Fio %s: zarážka `last` nastavena po importu historie", bank.display_name)
+            elif bank.fio_last_error and "409" not in bank.fio_last_error:
+                bank.fio_history_set_last_id = False
+                _logger.error("Fio %s: zarážku `last` se nepovedlo nastavit: %s", bank.display_name, bank.fio_last_error)
             else:
                 again = True
         for bank in self.sudo().search([("fio_history_running", "=", True)]):
@@ -217,7 +263,12 @@ class ResPartnerBank(models.Model):
                 continue
             items = bank._fio_call(fio_api.fetch_periods, start, end)
             if items is None:
-                again = True  # limit nebo chyba, zkusit znovu za chvíli
+                if bank.fio_last_error and "409" not in bank.fio_last_error:
+                    # jiná chyba než limit (špatný token, odmítnutý požadavek): nezacyklit se
+                    bank.fio_history_running = False
+                    _logger.error("Fio %s: import historie zastaven: %s", bank.display_name, bank.fio_last_error)
+                    continue
+                again = True  # limit, zkusit znovu za chvíli
                 continue
             bank._fio_store_transactions(items)
             bank.fio_history_cursor = end

@@ -13,6 +13,9 @@ _logger = logging.getLogger(__name__)
 
 AMOUNT_TOLERANCE = 0.005
 MIN_REFERENCE_KEY_LENGTH = 6
+# Pohyb může být vyšší než platba (plátce přidal dýško), nikdy nižší. Bez čísla objednávky
+# (jen podle částky, při otevřeném QR) se dýško toleruje nejvýš do této části platby.
+TIP_MAX_RATIO = 0.5
 
 
 def digits(value):
@@ -57,6 +60,10 @@ class FioBankTransaction(models.Model):
             ("manual", "Ručně"),
         ],
         string="Způsob spárování",
+    )
+    tip_amount = fields.Monetary(
+        string="Dýško", currency_field="currency_id",
+        help="O kolik je pohyb vyšší než spárovaná platba v pokladně.",
     )
     pos_payment_id = fields.Many2one("pos.payment", string="Platba v pokladně", ondelete="set null", index=True)
     pos_order_id = fields.Many2one(related="pos_payment_id.pos_order_id", string="Objednávka")
@@ -147,10 +154,34 @@ class FioBankTransaction(models.Model):
             re.search(r"(?<!\d)" + re.escape(key), text) for key in self._pos_reference_keys(pos_reference)
         )
 
-    def _amount_equals(self, amount):
+    def _pos_payment_ids_by_text(self):
+        """Id čekajících plateb, jejichž číslo objednávky (poslední část `pos_reference`) je
+        v textu pohybu. Hledá se v SQL, aby cron nad historií neprocházel tisíce plateb v Pythonu;
+        hranici před číslicí pak ověří `_text_matches_reference`."""
+        self.ensure_one()
+        text = self._search_text()
+        if not text:
+            return []
+        self.env.cr.execute(
+            r"""
+            SELECT p.id
+              FROM pos_payment p
+              JOIN pos_order o ON o.id = p.pos_order_id
+             WHERE p.fio_state IN ('pending', 'manual')
+               AND p.amount > 0 AND p.amount <= %s
+               AND o.pos_reference IS NOT NULL
+               AND length(regexp_replace(o.pos_reference, '^.*\s', '')) >= %s
+               AND position(lower(regexp_replace(o.pos_reference, '^.*\s', '')) IN %s) > 0
+            """,
+            (self.amount + AMOUNT_TOLERANCE, MIN_REFERENCE_KEY_LENGTH, text),
+        )
+        return [row[0] for row in self.env.cr.fetchall()]
+
+    def _tip_for(self, payment_amount):
         self.ensure_one()
         rounding = self.currency_id.rounding or 0.01
-        return float_compare(self.amount, amount, precision_rounding=rounding) == 0
+        tip = self.amount - payment_amount
+        return tip if float_compare(tip, 0.0, precision_rounding=rounding) > 0 else 0.0
 
     def _match_new(self):
         """Spáruje nové příchozí pohyby s čekajícími QR platbami a fakturami."""
@@ -163,15 +194,29 @@ class FioBankTransaction(models.Model):
         """Projde všechny nespárované příchozí pohyby (cron, tlačítko, po importu historie)."""
         self.search([("state", "=", "new"), ("amount", ">", 0)])._match_new()
 
-    def _pos_candidates(self):
-        """Čekající QR platby ve stejné částce vedené na náš účet."""
+    def _pos_candidates(self, pos_reference=None, by_text=True):
+        """Čekající QR platby na náš účet, které pohyb pokrývá (stejná částka nebo vyšší o dýško).
+
+        `pos_reference` omezí na jednu objednávku; jinak s `by_text` jen na objednávky, jejichž
+        číslo je v textu pohybu; s `by_text=False` všechny čekající platby (ruční spárování).
+        """
         self.ensure_one()
         Payment = self.env["pos.payment"].sudo()
-        candidates = Payment.search([
-            ("fio_state", "in", ("pending", "manual")),
-            ("amount", ">=", self.amount - AMOUNT_TOLERANCE),
-            ("amount", "<=", self.amount + AMOUNT_TOLERANCE),
-        ])
+        if pos_reference is not None:
+            candidates = Payment.search([
+                ("fio_state", "in", ("pending", "manual")),
+                ("amount", ">", 0),
+                ("amount", "<=", self.amount + AMOUNT_TOLERANCE),
+                ("pos_order_id.pos_reference", "=", pos_reference),
+            ])
+        elif by_text:
+            candidates = Payment.browse(self._pos_payment_ids_by_text())
+        else:
+            candidates = Payment.search([
+                ("fio_state", "in", ("pending", "manual")),
+                ("amount", ">", 0),
+                ("amount", "<=", self.amount + AMOUNT_TOLERANCE),
+            ])
         return candidates.filtered(
             lambda p: not p.payment_method_id.journal_id.bank_account_id
             or p.payment_method_id.journal_id.bank_account_id == self.bank_account_id
@@ -179,14 +224,14 @@ class FioBankTransaction(models.Model):
 
     def _try_match_pos(self):
         self.ensure_one()
-        candidates = self._pos_candidates()
         if self.reserved_reference:
-            reserved = candidates.filtered(lambda p: p.pos_order_id.pos_reference == self.reserved_reference)
+            reserved = self._pos_candidates(pos_reference=self.reserved_reference)
             if reserved:
                 payment = reserved.sorted("id")[0]
                 match_type = "reference" if self._text_matches_reference(payment.pos_order_id.pos_reference) else "amount"
                 self._link_pos_payment(payment, match_type)
                 return True
+        candidates = self._pos_candidates()
         for payment in candidates.sorted(lambda p: p.payment_date or fields.Datetime.now(), reverse=True):
             if self._text_matches_reference(payment.pos_order_id.pos_reference):
                 self._link_pos_payment(payment, "reference")
@@ -199,6 +244,7 @@ class FioBankTransaction(models.Model):
             "state": "matched",
             "match_type": match_type,
             "pos_payment_id": payment.id,
+            "tip_amount": self._tip_for(payment.amount),
             "reserved_reference": False,
             "note": note or False,
         })
@@ -301,7 +347,7 @@ class FioBankTransaction(models.Model):
                 tx.pos_payment_id.sudo().write({"fio_state": "pending", "fio_transaction_id": False, "fio_confirmed_at": False})
         self.write({
             "state": "new", "match_type": False, "pos_payment_id": False, "move_id": False,
-            "payment_id": False, "note": False, "reserved_reference": False,
+            "payment_id": False, "note": False, "reserved_reference": False, "tip_amount": 0.0,
         })
         return True
 

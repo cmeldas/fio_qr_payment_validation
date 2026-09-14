@@ -63,6 +63,7 @@ class TestFioMatching(CommonPosTest):
             "acc_number": "CZ3820100000002401835999",
             "partner_id": cls.env.company.partner_id.id,
             "fio_api_token": "t" * 64,
+            "fio_bookmark_set": True,  # jako po prvním kontaktu s Fio; samotné nastavení testuje test_first_sync_sets_bookmark
         })
         cls.bank_journal = cls.env["account.journal"].create({
             "name": "Fio", "type": "bank", "code": "FIO",
@@ -136,22 +137,27 @@ class TestFioMatching(CommonPosTest):
         self.assertEqual(cash_order.payment_ids.fio_state, "none")
 
         txs = self._store([
-            fio_transaction(101, date.today(), order.amount_total, "Objednávka 261-1-000005 5"),
+            fio_transaction(100, date.today(), order.amount_total - 1, "Objednávka 261-1-000005 5"),  # nižší → ne
+            fio_transaction(101, date.today(), order.amount_total + 20, "Objednávka 261-1-000005 5"),  # dýško 20
             fio_transaction(102, date.today(), order.amount_total, "Order 999-9-999999 5"),
             fio_transaction(103, date.today(), -12.0, "odchozí"),
         ])
-        self.assertEqual(len(txs), 3)
+        self.assertEqual(len(txs), 4)
         txs._match_new()
+        self.assertEqual(txs[0].state, "new", "pohyb nižší než platba se nepáruje")
         self.assertEqual(payment.fio_state, "confirmed")
-        self.assertEqual(payment.fio_transaction_id, txs[0])
-        self.assertEqual(txs[0].match_type, "reference")
-        self.assertEqual(txs[1].state, "new")
+        self.assertEqual(payment.fio_transaction_id, txs[1])
+        self.assertEqual(txs[1].match_type, "reference")
+        self.assertAlmostEqual(txs[1].tip_amount, 20.0)
+        self.assertAlmostEqual(payment.fio_tip_amount, 20.0)
         self.assertEqual(txs[2].state, "new")
-        self.assertFalse(txs[2].is_incoming)
+        self.assertEqual(txs[3].state, "new")
+        self.assertFalse(txs[3].is_incoming)
         self.assertFalse(self._store([fio_transaction(101, date.today(), order.amount_total, "duplicita")]))
 
-        txs[0].action_reset()
-        self.assertEqual(txs[0].state, "new")
+        txs[1].action_reset()
+        self.assertEqual(txs[1].state, "new")
+        self.assertEqual(txs[1].tip_amount, 0.0)
         self.assertEqual(payment.fio_state, "pending")
         self.assertFalse(payment.fio_transaction_id)
 
@@ -159,7 +165,15 @@ class TestFioMatching(CommonPosTest):
         self.assertEqual(payment.fio_state, "manual")
         self.env["fio.bank.transaction"]._match_pending()
         self.assertEqual(payment.fio_state, "confirmed", "ručně potvrzenou platbu cron dopáruje")
-        self.assertEqual(payment.fio_transaction_id, txs[0])
+        self.assertEqual(payment.fio_transaction_id, txs[1])
+        self.assertEqual(txs[0].state, "new")
+
+    def test_exact_amount_without_tip(self):
+        order = self._order(self.product_80, self.qr_payment_method, pos_reference="Order 261-1-000006")
+        tx = self._store([fio_transaction(110, date.today(), order.amount_total, "Order 261-1-000006 6")])
+        tx._match_new()
+        self.assertEqual(order.payment_ids.fio_state, "confirmed")
+        self.assertEqual(tx.tip_amount, 0.0)
 
     def test_pos_check_reserves_transaction(self):
         method = self.qr_payment_method
@@ -187,12 +201,55 @@ class TestFioMatching(CommonPosTest):
         self.assertEqual(tx.match_type, "amount")
         self.assertFalse(tx.reserved_reference)
 
+    def test_pos_check_tip_rules(self):
+        method = self.qr_payment_method
+        # jen podle částky: dýško do 50 % platby projde, větší pohyb bez čísla objednávky ne
+        items = fio_api.parse_transactions(fio_payload([fio_transaction(211, date.today(), 90.0, "bez cisla")]))
+        with patch.object(fio_api, "fetch_last", return_value=items):
+            res = method.fio_check_qr_payment(77.0, "Order 300-1-000011", self.currency_id)
+        self.assertTrue(res["confirmed"])
+        self.assertEqual(res["match_type"], "amount")
+        self.assertAlmostEqual(res["tip"], 13.0)
+
+        self.bank_account.fio_last_request_at = False
+        items = fio_api.parse_transactions(fio_payload([fio_transaction(212, date.today(), 200.0, "bez cisla")]))
+        with patch.object(fio_api, "fetch_last", return_value=items):
+            res = method.fio_check_qr_payment(77.0, "Order 300-1-000012", self.currency_id)
+        self.assertFalse(res["confirmed"], "pohyb o víc než 50 % vyšší bez čísla objednávky se nebere")
+
+        # s číslem objednávky projde libovolně vyšší pohyb, nižší nikdy
+        self.bank_account.fio_last_request_at = False
+        items = fio_api.parse_transactions(fio_payload([
+            fio_transaction(213, date.today(), 70.0, "Order 300-1-000013 1"),
+            fio_transaction(214, date.today(), 200.0, "Order 300-1-000013 1"),
+        ]))
+        with patch.object(fio_api, "fetch_last", return_value=items):
+            res = method.fio_check_qr_payment(77.0, "Order 300-1-000013", self.currency_id)
+        self.assertTrue(res["confirmed"])
+        self.assertEqual(res["match_type"], "reference")
+        self.assertAlmostEqual(res["amount"], 200.0)
+        self.assertAlmostEqual(res["tip"], 123.0)
+
     def test_pos_check_disabled_without_token(self):
         self.bank_account.fio_api_token = False
         self.assertEqual(
             self.qr_payment_method.fio_check_qr_payment(1.0, "Order 1-1-000001", self.currency_id),
             {"enabled": False},
         )
+
+    def test_first_sync_sets_bookmark(self):
+        bank = self.bank_account
+        bank.fio_bookmark_set = False
+        with patch.object(fio_api, "set_last_date") as set_last_date, patch.object(fio_api, "fetch_last") as fetch_last:
+            self.assertFalse(bank.fio_sync_recent(), "první volání jen nastaví zarážku")
+            set_last_date.assert_called_once()
+            self.assertEqual(set_last_date.call_args.args[1], date.today() - timedelta(days=85))
+            fetch_last.assert_not_called()
+        self.assertTrue(bank.fio_bookmark_set)
+        bank.fio_last_request_at = False
+        with patch.object(fio_api, "fetch_last", return_value=[]) as fetch_last:
+            self.assertTrue(bank.fio_sync_recent())
+            fetch_last.assert_called_once()
 
     def test_rate_limit_and_errors(self):
         bank = self.bank_account
@@ -267,6 +324,13 @@ class TestFioMatching(CommonPosTest):
         tx._match_new()
         self.assertEqual(tx.state, "new", "cron bez čísla objednávky nepáruje jen podle částky")
 
+        lower = self._store([fio_transaction(402, date.today(), order.amount_total - 5, "míň")])
+        wizard_lower = self.env["fio.match.wizard"].with_context(default_transaction_id=lower.id).create({
+            "pos_payment_id": payment.id,
+        })
+        with self.assertRaises(UserError, msg="nižší pohyb nejde spárovat ani ručně"):
+            wizard_lower.action_confirm()
+
         wizard = self.env["fio.match.wizard"].with_context(default_transaction_id=tx.id).create({})
         wizard._onchange_transaction_id()
         self.assertEqual(wizard.pos_payment_id, payment, "jediná čekající platba ve stejné částce se předvyplní")
@@ -295,7 +359,7 @@ class TestFioMatching(CommonPosTest):
                 fio_transaction(500 + len(calls), day_from, 1.0, f"historie {len(calls)}"),
             ]))
 
-        bank.write({"fio_history_from": date.today() - timedelta(days=200)})
+        bank.write({"fio_history_from": date.today() - timedelta(days=800), "fio_bookmark_set": False})
         with patch.object(fio_api, "fetch_periods", side_effect=fetch_periods), \
              patch.object(fio_api, "set_last_id", side_effect=lambda token, fio_id: set_last.append(fio_id)):
             bank.action_fio_import_history()
@@ -304,8 +368,8 @@ class TestFioMatching(CommonPosTest):
                 bank.fio_last_request_at = False  # jako by uplynulo 30 s
                 Bank._cron_fio_history_step()
             self.assertFalse(bank.fio_history_running)
-            self.assertEqual(len(calls), 3, "200 dní = tři bloky po 90 dnech")
-            self.assertEqual(calls[0][0], date.today() - timedelta(days=200))
+            self.assertEqual(len(calls), 3, "800 dní = tři roční bloky")
+            self.assertEqual(calls[0][0], date.today() - timedelta(days=800))
             self.assertEqual(calls[1][0], calls[0][1] + timedelta(days=1))
             self.assertEqual(calls[-1][1], date.today())
             self.assertEqual(bank.fio_history_set_last_id, "503")
@@ -313,10 +377,25 @@ class TestFioMatching(CommonPosTest):
             Bank._cron_fio_history_step()
             self.assertEqual(set_last, ["503"])
             self.assertFalse(bank.fio_history_set_last_id)
+            self.assertTrue(bank.fio_bookmark_set, "po importu historie je zarážka `last` nastavená")
         stored = self.env["fio.bank.transaction"].search([
             ("bank_account_id", "=", bank.id), ("fio_id", "in", ["501", "502", "503"]),
         ])
         self.assertEqual(len(stored), 3)
+
+    def test_history_import_stops_on_api_error(self):
+        bank = self.bank_account
+        bank.write({"fio_history_from": date.today() - timedelta(days=10), "fio_last_request_at": False})
+        with patch.object(fio_api, "fetch_periods", side_effect=fio_api.FioApiError("Fio API: HTTP 422 – odmítnuto")):
+            bank.action_fio_import_history()
+            self.env["res.partner.bank"]._cron_fio_history_step()
+        self.assertFalse(bank.fio_history_running, "po chybě jiné než limit se import nezacyklí")
+        self.assertIn("422", bank.fio_last_error)
+        bank.fio_last_request_at = False
+        with patch.object(fio_api, "fetch_periods", side_effect=fio_api.FioRateLimitError("HTTP 409")):
+            bank.action_fio_import_history()
+            self.env["res.partner.bank"]._cron_fio_history_step()
+        self.assertTrue(bank.fio_history_running, "po limitu 409 import pokračuje dalším krokem")
 
     def test_hourly_cron_syncs_and_matches(self):
         order = self._order(self.product_80, self.qr_payment_method, pos_reference="Order 261-1-000077")

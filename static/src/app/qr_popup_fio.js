@@ -99,6 +99,9 @@ patch(QRPopup.prototype, {
         this.fio.detail = result.counter_name
             ? _t("Platba od %s dorazila na účet.", result.counter_name)
             : _t("Platba dorazila na účet.");
+        if (result.tip > 0) {
+            this.fio.detail += " " + _t("Dýško %s.", this.env.utils.formatCurrency(result.tip));
+        }
         const line = this.props.line;
         line.qrPaymentData = { ...(line.qrPaymentData || {}), fioConfirmed: true };
         this.notification.add(_t("Automaticky potvrzeno: platba dorazila na účet Fio."), {

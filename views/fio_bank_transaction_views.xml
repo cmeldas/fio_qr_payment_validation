@@ -24,6 +24,7 @@
                        decoration-muted="state == 'ignored'"/>
                 <field name="match_type" optional="show"/>
                 <field name="pos_order_id" optional="show"/>
+                <field name="tip_amount" optional="show" sum="Dýška"/>
                 <field name="move_id" optional="show"/>
                 <field name="note" optional="hide"/>
                 <button name="action_open_match_wizard" type="object" icon="fa-link" title="Ručně spárovat"
@@ -85,6 +86,7 @@
                         <field name="match_type"/>
                         <field name="pos_payment_id"/>
                         <field name="pos_order_id"/>
+                        <field name="tip_amount" invisible="not pos_payment_id"/>
                         <field name="move_id"/>
                         <field name="payment_id"/>
                         <field name="reserved_reference" invisible="not reserved_reference"/>

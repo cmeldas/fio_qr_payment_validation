@@ -23,6 +23,7 @@
                     <field name="pos_reference"/>
                     <field name="fio_transaction_id"/>
                     <field name="fio_match_type" invisible="not fio_transaction_id"/>
+                    <field name="fio_tip_amount" invisible="not fio_tip_amount"/>
                     <field name="fio_confirmed_at" invisible="not fio_confirmed_at"/>
                 </group>
             </xpath>
@@ -85,6 +86,7 @@
                        decoration-info="fio_state == 'manual'"
                        decoration-muted="fio_state == 'ignored'"/>
                 <field name="fio_transaction_id" optional="show"/>
+                <field name="fio_tip_amount" optional="show"/>
                 <field name="fio_confirmed_at" optional="hide"/>
                 <button name="action_fio_confirm_manual" type="object" icon="fa-check" title="Potvrdit ručně (zkontrolováno)"
                         invisible="fio_state != 'pending'" groups="point_of_sale.group_pos_manager"/>

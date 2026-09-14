@@ -32,8 +32,11 @@ class FioMatchWizard(models.TransientModel):
         tx = self.transaction_id
         if not tx:
             return
-        candidates = tx._pos_candidates()
-        if len(candidates) == 1:
+        candidates = tx._pos_candidates(by_text=False)
+        exact = candidates.filtered(lambda p: abs(p.amount - tx.amount) < 0.005)
+        if len(exact) == 1:
+            self.pos_payment_id = exact
+        elif len(candidates) == 1:
             self.pos_payment_id = candidates
         move = tx._find_invoices_by_vs(tx.variable_symbol)[:1]
         if move:
@@ -49,6 +52,8 @@ class FioMatchWizard(models.TransientModel):
         if self.target == "pos":
             if not self.pos_payment_id:
                 raise UserError(_("Vyber platbu v pokladně."))
+            if tx.amount < self.pos_payment_id.amount - 0.005:
+                raise UserError(_("Pohyb je nižší než platba v pokladně; pohyb může být jen stejný nebo vyšší (dýško)."))
             tx._link_pos_payment(self.pos_payment_id, "manual")
         else:
             if not self.move_id:

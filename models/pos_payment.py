@@ -21,6 +21,7 @@ class PosPayment(models.Model):
     fio_transaction_id = fields.Many2one("fio.bank.transaction", string="Pohyb Fio", copy=False, index=True)
     fio_confirmed_at = fields.Datetime(string="Potvrzeno", copy=False)
     fio_match_type = fields.Selection(related="fio_transaction_id.match_type", string="Způsob spárování")
+    fio_tip_amount = fields.Monetary(related="fio_transaction_id.tip_amount", string="Dýško", currency_field="currency_id")
     pos_reference = fields.Char(related="pos_order_id.pos_reference", string="Číslo objednávky")
 
     def _is_fio_qr_payment(self):
@@ -38,14 +39,16 @@ class PosPayment(models.Model):
         return payments
 
     def _fio_try_match(self):
-        """Po uložení objednávky zkusí najít už stažený pohyb (rozpoznaný při otevřeném QR nebo cronem)."""
+        """Po uložení objednávky zkusí najít už stažený pohyb (rozpoznaný při otevřeném QR nebo cronem).
+
+        Pohyb musí platbu pokrývat: stejná částka nebo vyšší (dýško), nikdy nižší.
+        """
         self.ensure_one()
         Transaction = self.env["fio.bank.transaction"].sudo()
         bank = self.payment_method_id.journal_id.bank_account_id
         domain = [
             ("state", "=", "new"),
             ("amount", ">=", self.amount - 0.005),
-            ("amount", "<=", self.amount + 0.005),
         ]
         if bank:
             domain.append(("bank_account_id", "=", bank.id))

@@ -10,7 +10,7 @@ průběžně a při shodě platbu **potvrdí sám** – obsluze i zákazníkovi 
 
 | Kde | Co se děje |
 |---|---|
-| Pokladna, otevřený QR kód | Každých 5 s se pokladna ptá serveru; server stáhne nové pohyby z Fio (nejvýš jednou za 30 s) a hledá příchozí pohyb ve stejné částce s číslem objednávky ve zprávě. Při shodě: zelené „Automaticky potvrzeno“, banner „Platba přijata“ na zákaznickém displeji, po 3 s se platba potvrdí sama. Obsluha může potvrdit i dřív, nebo ručně jako dosud. |
+| Pokladna, otevřený QR kód | Každých 5 s se pokladna ptá serveru; server stáhne nové pohyby z Fio (nejvýš jednou za 30 s) a hledá příchozí pohyb, který platbu pokrývá (stejná částka nebo vyšší o dýško) a má číslo objednávky ve zprávě. Při shodě: zelené „Automaticky potvrzeno“ (s výší dýška), banner „Platba přijata“ na zákaznickém displeji, po 3 s se platba potvrdí sama. Obsluha může potvrdit i dřív, nebo ručně jako dosud. |
 | Uložení objednávky | Nová QR platba dostane stav **Čeká na banku**. Když už pohyb existuje (rozpoznaný při otevřeném QR nebo stažený cronem), spáruje se hned → **Potvrzeno bankou**. |
 | Cron každou hodinu | Stáhne nové pohyby (`last`) a spáruje vše, co čeká – včetně plateb potvrzených ručně v pokladně a plateb z víkendu, které banka pošle až v pondělí. |
 | Faktury | Příchozí pohyb s variabilním symbolem = platební reference vystavené faktury: na faktuře se **zaregistruje platba** do bankovního deníku účtu (částka a datum z pohybu). Už uhrazená faktura se jen propojí. |
@@ -30,14 +30,17 @@ pozadí do stavu *Čeká na banku*.
 
 ### Jak se páruje
 
-1. **Pokladna** – pohyb je příchozí, částka sedí (na zaokrouhlení měny) a ve zprávě pro
-   příjemce / identifikaci / komentáři je číslo objednávky bez mezer a bez ohledu na velikost
-   písmen a diakritiku. Hledá se celé `pos_reference` (`order00275-006-0114`) i jen jeho
-   poslední část (`00275-006-0114`), takže sedí zprávy z Odoo 18 („Objednávka …“) i 19
-   („Order …“) a i když plátce začátek zprávy přepíše.
+1. **Pokladna** – pohyb je příchozí, **pokrývá platbu** (stejná částka, nebo vyšší – plátce
+   přidal dýško; nižší pohyb se nepáruje nikdy) a ve zprávě pro příjemce / identifikaci /
+   komentáři je číslo objednávky bez mezer a bez ohledu na velikost písmen a diakritiku.
+   Hledá se celé `pos_reference` (`order00275-006-0114`) i jen jeho poslední část
+   (`00275-006-0114`), takže sedí zprávy z Odoo 18 („Objednávka …“) i 19 („Order …“) a i když
+   plátce začátek zprávy přepíše; před číslem nesmí být další číslice („61-1-000005“ nesedí na
+   „261-1-000005“). Rozdíl se uloží k pohybu jako **Dýško** (vidět i u platby).
 2. **Při otevřeném QR** navíc platí záložní pravidlo: když číslo objednávky ve zprávě chybí,
-   ale existuje **právě jeden** dnešní nebo včerejší nespárovaný pohyb v přesné částce,
-   bere se jako platba probíhající objednávky (`Jen částka`). Cron toto pravidlo nepoužívá.
+   ale existuje **právě jeden** dnešní nebo včerejší nespárovaný pohyb v částce platby až
+   platby + 50 % (dýško bez čísla objednávky), bere se jako platba probíhající objednávky
+   (`Jen částka`). Cron toto pravidlo nepoužívá.
 3. **Faktury** – variabilní symbol pohybu = číslice z platební reference vystavené faktury
    (`payment_reference`), faktura je zaúčtovaná.
 
@@ -47,28 +50,50 @@ lze ručně spárovat (s platbou v pokladně nebo fakturou) nebo ignorovat.
 ## Nastavení
 
 1. V internetovém bankovnictví Fio: *Nastavení › API* → vytvořit token k účtu s právy
-   **pouze sledovat** (čtení). Token má 64 znaků a platí nejdéle 6 měsíců, pak je třeba
-   vydat nový a přepsat ho v Odoo.
+   **sledování účtu** (čtení). Zřízení se silně autorizuje (SMS / push), token má 64 znaků,
+   **funguje až 5 minut po autorizaci** a platí nejdéle 180 dní (volitelně se prodlužuje při
+   každém přihlášení do bankovnictví); po vypršení vydat nový a přepsat ho v Odoo.
 2. V Odoo: *Fakturace › Konfigurace › Bankovní účty* → účet, na který chodí QR platby
    (účet přiřazený bankovnímu deníku platební metody QR) → záložka **Fio** → vložit token.
    Záložku vidí jen správce systému.
-3. Tlačítko **Načíst historii** (výchozí „Historie od“ = pár dní před první QR platbou v
-   pokladně; nastaví instalace). Import běží na pozadí přes cron po 90 dnech s pauzou 35 s,
-   stav ukazuje „Historie stažena do“. Po dokončení se na Fio nastaví zarážka, aby hodinový
-   `last` navazoval.
-4. Zkontrolovat *Prodejní místo › Objednávky › QR platby ke kontrole* – co se nespárovalo,
+3. **Historie starší 90 dní**: Fio ji přes API vydá jen po dočasném odemknutí – v bankovnictví
+   *Nastavení › API* kliknout u tokenu na **ikonu zámku** a pokyn autorizovat; přístup platí
+   **10 minut**. Hned potom v Odoo tlačítko **Načíst historii** (výchozí „Historie od“ = pár dní
+   před první QR platbou v pokladně; nastaví instalace). Import běží na pozadí přes cron po
+   ročních blocích s pauzou 35 s (dva až tři dotazy), stav ukazuje „Historie stažena do“. Po
+   dokončení se na Fio nastaví zarážka za poslední pohyb, aby hodinový `last` navazoval.
+   Bez odemknutí skončí import chybou **HTTP 422** a zastaví se; po autorizaci ho stačí spustit
+   znovu (už stažené pohyby se přeskočí).
+4. Bez importu historie se při prvním stažení jen nastaví zarážka `last` 85 dní zpět (Fio
+   jinak sáhne do celé historie a vrátí 422); druhé stažení o 30 s později už pohyby přinese.
+5. Zkontrolovat *Prodejní místo › Objednávky › QR platby ke kontrole* – co se nespárovalo,
    ručně potvrdit nebo ignorovat.
+
+Jeden token má u Fio jednu zarážku `last`. Když stejný token používá lokální testovací Odoo
+i produkce, přetahují se o ni a část pohybů dostane jen jedna strana – pro lokální testy
+vydat druhý token, nebo ho z lokální databáze po testu smazat.
 
 Cron **Fio: stáhnout nové pohyby a spárovat platby** běží každou hodinu (Nastavení ›
 Technické › Naplánované akce). Ručně: tlačítka **Načíst nové pohyby** a **Spárovat čekající**
 na účtu.
 
-## Limit Fio API
+## Limity Fio API
 
 Fio dovolí **jeden dotaz za 30 s** na token (jinak HTTP 409). Modul si u účtu pamatuje čas
 posledního dotazu a nikdy nevolá dřív – ať se ptá pokladna, cron nebo tlačítko. Souběžné
 požadavky řeší zámek řádku účtu. Pokladna při otevřeném QR volá server každých 5 s, ale Fio
 se skutečně dotáže jen jednou za 30 s; párování mezitím běží nad už staženými pohyby.
+
+Chybové kódy Fio (dokumentace API Bankovnictví, verze 16. 10. 2025), text chyby je u účtu
+v poli „Poslední chyba Fio“:
+
+| kód | význam | co s tím |
+|---|---|---|
+| 409 | druhý dotaz do 30 s | modul počká, nic dělat |
+| 422 | data starší 90 dní bez silné autorizace | ikona zámku u tokenu v bankovnictví, do 10 minut spustit znovu |
+| 500 | neexistující nebo neaktivní token | zkontrolovat token, u nového počkat 5 minut, u starého platnost |
+| 413 | přes 50 000 pohybů v jednom dotazu | zkrátit „Historie od“ |
+| 404 | špatný tvar dotazu | chyba modulu, hlásit |
 
 ## Menu a pohledy
 

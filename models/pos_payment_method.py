@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
 from datetime import timedelta
 
-from odoo import api, fields, models
+from odoo import fields, models
+
+from .fio_bank_transaction import AMOUNT_TOLERANCE, TIP_MAX_RATIO
 
 
 class PosPaymentMethod(models.Model):
@@ -10,10 +12,11 @@ class PosPaymentMethod(models.Model):
     def fio_check_qr_payment(self, amount, pos_reference, currency_id):
         """Volá pokladna, dokud je otevřený QR kód platby.
 
-        Stáhne nové pohyby z Fio (nejvýš jednou za 30 s) a hledá příchozí pohyb ve stejné
-        částce s číslem objednávky ve zprávě. Když číslo chybí, vezme jediný dnešní nebo
-        včerejší nespárovaný pohyb ve stejné částce (platba právě probíhá, plátce zprávu
-        neposlal). Nalezený pohyb si rezervuje pro objednávku; spáruje se po jejím uložení.
+        Stáhne nové pohyby z Fio (nejvýš jednou za 30 s) a hledá příchozí pohyb, který platbu
+        pokrývá (stejná částka nebo vyšší o dýško, nikdy nižší) a má číslo objednávky ve zprávě.
+        Když číslo chybí, vezme jediný dnešní nebo včerejší nespárovaný pohyb v částce platby
+        až platby + 50 % (platba právě probíhá, plátce zprávu neposlal). Nalezený pohyb si
+        rezervuje pro objednávku; spáruje se po jejím uložení.
         """
         self.ensure_one()
         bank = self.sudo().journal_id.bank_account_id
@@ -24,13 +27,13 @@ class PosPaymentMethod(models.Model):
         candidates = Transaction.search([
             ("bank_account_id", "=", bank.id),
             ("state", "=", "new"),
-            ("amount", ">=", amount - 0.005),
-            ("amount", "<=", amount + 0.005),
-        ], order="date desc, id desc", limit=50)
+            ("amount", ">=", amount - AMOUNT_TOLERANCE),
+        ], order="date desc, id desc", limit=100)
+        candidates = candidates.filtered(
+            lambda t: not t.reserved_reference or t.reserved_reference == pos_reference
+        )
         match, match_type = None, None
         for tx in candidates:
-            if tx.reserved_reference and tx.reserved_reference != pos_reference:
-                continue
             if tx._text_matches_reference(pos_reference):
                 match, match_type = tx, "reference"
                 break
@@ -38,7 +41,7 @@ class PosPaymentMethod(models.Model):
             since = fields.Date.context_today(self) - timedelta(days=1)
             recent = candidates.filtered(
                 lambda t: t.date and t.date >= since
-                and (not t.reserved_reference or t.reserved_reference == pos_reference)
+                and t.amount <= amount * (1 + TIP_MAX_RATIO) + AMOUNT_TOLERANCE
             )
             if len(recent) == 1:
                 match, match_type = recent[0], "amount"
@@ -51,6 +54,8 @@ class PosPaymentMethod(models.Model):
                 "match_type": match_type,
                 "counter_name": match.counter_name or "",
                 "date": fields.Date.to_string(match.date) if match.date else "",
+                "amount": match.amount,
+                "tip": match._tip_for(amount),
             }
         return {
             "enabled": True,

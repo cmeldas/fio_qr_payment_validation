@@ -56,10 +56,16 @@ def _get(url):
         raise FioApiError(f"Fio API nedostupné: {exc}") from exc
     if response.status_code == 409:
         raise FioRateLimitError("Fio API: víc než jeden dotaz za 30 sekund (HTTP 409)")
-    if response.status_code == 500:
-        raise FioApiError("Fio API: neplatný token nebo chybný požadavek (HTTP 500)")
     if response.status_code != 200:
-        raise FioApiError(f"Fio API: HTTP {response.status_code}")
+        detail = " ".join((response.text or "").split())[:300]
+        hint = {
+            404: "špatně zaslaný dotaz (parametry URL)",
+            413: "příliš mnoho pohybů (limit 50 000), zkrať období",
+            422: "data starší 90 dní bez silné autorizace: v internetbankingu Fio Nastavení › API klikni u tokenu "
+                 "na ikonu zámku a autorizuj přístup k historii (platí 10 minut), pak akci zopakuj",
+            500: "neexistující nebo neaktivní token (nový token funguje 5 minut po autorizaci, platnost nejdéle 180 dní)",
+        }.get(response.status_code, "neočekávaná odpověď")
+        raise FioApiError(f"Fio API: HTTP {response.status_code} – {hint}" + (f" ({detail})" if detail else ""))
     return response
 
 
