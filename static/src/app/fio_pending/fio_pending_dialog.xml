@@ -3,11 +3,21 @@
 
     <t t-name="fio_qr_payment_validation.FioPendingDialog">
         <Dialog size="'md'" title="title">
-            <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
-                <button class="btn btn-secondary fio-refresh-btn" t-on-click="refreshFromBank" t-att-disabled="pending.loading">
-                    <i class="fa fa-refresh me-1" t-att-class="{ 'fa-spin': pending.loading }" role="img" aria-label="Načíst"/>Načíst platby z banky
+            <div class="d-flex flex-wrap align-items-center gap-2 mb-1">
+                <button class="btn btn-secondary fio-refresh-btn" t-on-click="refreshFromBank" t-att-disabled="pending.loading or pending.autoRefresh or !pending.bankEnabled">
+                    <i class="fa fa-refresh me-1" t-att-class="{ 'fa-spin': pending.loading or pending.autoRefresh }" role="img" aria-label="Načíst"/>
+                    <t t-if="pending.autoRefresh">Čekám na banku…</t>
+                    <t t-else="">Načíst platby z banky</t>
                 </button>
                 <span t-if="pending.message" class="small fio-refresh-message" t-att-class="{ 'text-success': pending.messageType === 'success', 'text-warning': pending.messageType === 'warning', 'text-danger': pending.messageType === 'danger', 'text-muted': !pending.messageType }" t-esc="pending.message"/>
+            </div>
+            <div t-if="pending.bankEnabled" class="fio-bank-countdown mb-2">
+                <div class="small text-muted fio-bank-countdown-label" t-esc="countdownLabel"/>
+                <div class="progress mt-1" style="height: 6px;">
+                    <div class="progress-bar fio-bank-progress" role="progressbar"
+                         t-att-class="{ 'bg-warning': pending.autoRefresh, 'bg-info': !pending.autoRefresh }"
+                         t-attf-style="width: {{ progressPercent }}%; transition: width 0.25s linear;"/>
+                </div>
             </div>
             <div t-if="!pending.payments.length" class="text-muted py-3 text-center">
                 <i class="fa fa-check-circle text-success me-1" role="img" aria-label="OK"/>

@@ -5,8 +5,12 @@ import { _t } from "@web/core/l10n/translation";
 import { patch } from "@web/core/utils/patch";
 import { onMounted, onWillUnmount, useState } from "@odoo/owl";
 
-/** Jak často se pokladna ptá serveru (server sám volá Fio nejvýš jednou za 30 s). */
+/** Nejdelší pauza mezi dotazy pokladny na server (server sám volá Fio nejvýš jednou za 30 s). */
 const POLL_INTERVAL_MS = 5000;
+/** Rezerva, aby dotaz na server nepřišel o zlomek sekundy dřív, než Fio zase dovolí stažení. */
+const DUE_MARGIN_MS = 300;
+/** Jak často se překresluje odpočet do další kontroly banky. */
+const TICK_MS = 250;
 
 /**
  * Ověření QR platby proti Fio, dokud je otevřený QR kód v pokladně.
@@ -16,6 +20,9 @@ const POLL_INTERVAL_MS = 5000;
  * server rezervuje pro objednávku a spáruje ho při jejím uložení. Popup ukáže zelené
  * „Automaticky potvrzeno“ a pošle stav na zákaznický displej; potvrzení zůstává, dokud
  * obsluha neklikne na „Potvrdit platbu“ (zákazník tak vidí „Platba přijata“ stejně dlouho).
+ *
+ * Během čekání běží ukazatel: plný hned po stažení z banky, prázdný ve chvíli, kdy Fio
+ * dovolí další dotaz (30 s) – přesně tehdy se pokladna serveru zeptá znovu.
  */
 patch(QRPopup.prototype, {
     setup() {
@@ -23,8 +30,15 @@ patch(QRPopup.prototype, {
         this.pos = usePos();
         this.orm = useService("orm");
         this.notification = useService("notification");
-        this.fio = useState({ status: "idle", detail: "" });
+        this.fio = useState({
+            status: "idle",
+            detail: "",
+            nextAt: 0, // kdy Fio zase dovolí dotaz (ms)
+            rateLimit: 30, // s
+            now: Date.now(),
+        });
         this.fioTimer = null;
+        this.fioTicker = null;
         this.fioStopped = false;
         onMounted(() => this.fioStart());
         onWillUnmount(() => this.fioStop());
@@ -32,13 +46,18 @@ patch(QRPopup.prototype, {
 
     fioStart() {
         this.fio.status = "checking";
+        this.fioTicker = setInterval(() => {
+            this.fio.now = Date.now();
+        }, TICK_MS);
         this.fioCheck();
     },
 
     fioStop() {
         this.fioStopped = true;
         clearTimeout(this.fioTimer);
+        clearInterval(this.fioTicker);
         this.fioTimer = null;
+        this.fioTicker = null;
     },
 
     fioSchedule(delayMs) {
@@ -52,6 +71,22 @@ patch(QRPopup.prototype, {
     fioOrderReference() {
         const order = this.props.order;
         return order.pos_reference || order.name || "";
+    },
+
+    /** Zbývající ms do chvíle, kdy Fio dovolí další stažení. */
+    get fioRemainingMs() {
+        return Math.max(0, this.fio.nextAt - this.fio.now);
+    },
+
+    /** Šířka ukazatele: 100 % hned po stažení z banky, 0 % když je další dotaz na řadě. */
+    get fioProgressPercent() {
+        const total = (this.fio.rateLimit || 30) * 1000;
+        return Math.min(100, Math.round((this.fioRemainingMs / total) * 100));
+    },
+
+    get fioCountdownLabel() {
+        const seconds = Math.ceil(this.fioRemainingMs / 1000);
+        return seconds > 0 ? _t("Další kontrola banky za %s s", seconds) : _t("Kontroluji banku…");
     },
 
     async fioCheck() {
@@ -90,7 +125,13 @@ patch(QRPopup.prototype, {
         }
         this.fio.status = "checking";
         this.fio.detail = "";
-        this.fioSchedule(POLL_INTERVAL_MS);
+        this.fio.rateLimit = result.rate_limit || 30;
+        this.fio.nextAt = Date.now() + (result.next_check_in || 0) * 1000;
+        this.fio.now = Date.now();
+        // další dotaz nejpozději za 5 s, ale přesně ve chvíli, kdy Fio dovolí nové stažení
+        // (nejdřív za 1 s, aby se pokladna nezacyklila, když server stažení z nějakého důvodu neudělá)
+        const untilDue = this.fioRemainingMs + DUE_MARGIN_MS;
+        this.fioSchedule(Math.min(POLL_INTERVAL_MS, Math.max(1000, untilDue)));
     },
 
     fioConfirmed(result) {

@@ -5,6 +5,8 @@ import pytz
 
 from odoo import api, fields, models
 
+from .fio_api import RATE_LIMIT_SECONDS
+
 TIPS_ACTION_XMLID = "fio_qr_payment_validation.action_fio_tips"
 
 FIO_STATES = [
@@ -112,11 +114,16 @@ class PosPayment(models.Model):
             domain.append(("payment_date", ">=", since))
         payments = self.sudo().search(domain, order="payment_date desc, id desc", limit=limit)
         tip_today, tip_today_count = self._fio_tips_today(config)
+        banks = self._fio_banks_for_config(config)
         return {
             "count": self.sudo().search_count(domain),
             "tip_today": tip_today,
             "tip_today_count": tip_today_count,
             "tips_url": f"/odoo/action-{TIPS_ACTION_XMLID}",
+            # pro odpočet v popupu: za kolik sekund Fio dovolí další dotaz (0 = hned)
+            "next_check_in": max([bank._fio_seconds_until_allowed() for bank in banks], default=0),
+            "rate_limit": RATE_LIMIT_SECONDS,
+            "bank_enabled": bool(banks),
             "payments": [
                 {
                     "id": payment.id,
@@ -144,10 +151,7 @@ class PosPayment(models.Model):
         result = {"synced": False, "wait": 0, "error": ""}
         if config:
             config._fio_heartbeat()
-            banks = config.payment_method_ids.filtered(
-                lambda m: m.payment_method_type == "qr_code" or m.qr_code_method
-            ).journal_id.bank_account_id.filtered("fio_api_token")
-            for bank in banks:
+            for bank in self._fio_banks_for_config(config):
                 wait = bank._fio_seconds_until_allowed()
                 if wait:
                     result["wait"] = max(result["wait"], wait)
@@ -162,6 +166,16 @@ class PosPayment(models.Model):
             self.env["fio.bank.transaction"].sudo()._match_pending()
         result.update(self.fio_pending_overview(config_id))
         return result
+
+    @api.model
+    def _fio_banks_for_config(self, config):
+        """Účty s Fio tokenem u QR platebních metod dané pokladny."""
+        if not config:
+            return self.env["res.partner.bank"].sudo()
+        methods = config.sudo().payment_method_ids.filtered(
+            lambda m: m.payment_method_type == "qr_code" or m.qr_code_method
+        )
+        return methods.journal_id.bank_account_id.filtered("fio_api_token")
 
     @api.model
     def _fio_today_bounds(self):

@@ -11,6 +11,8 @@ import { FioPendingDialog } from "./fio_pending_dialog";
  * dokud chodí, cron se Fio ptá každých 5 minut, jinak jednou za hodinu.
  */
 const REFRESH_MS = 60000;
+/** Rezerva, aby dotaz na server nepřišel dřív, než Fio zase dovolí stažení. */
+const DUE_MARGIN_MS = 300;
 
 patch(PosStore.prototype, {
     async setup(...args) {
@@ -20,10 +22,15 @@ patch(PosStore.prototype, {
             tipToday: 0,
             tipTodayCount: 0,
             tipsUrl: "",
+            bankEnabled: false,
+            nextAllowedAt: 0, // kdy Fio zase dovolí dotaz (ms)
+            rateLimit: 30, // s
+            autoRefresh: false, // obsluha klikla na načtení během limitu: načte se samo, až to půjde
             loading: false,
             message: "",
             messageType: "",
         };
+        this.fioAutoTimer = null;
         return super.setup(...args);
     },
 
@@ -33,6 +40,9 @@ patch(PosStore.prototype, {
         this.fioPending.tipToday = result.tip_today || 0;
         this.fioPending.tipTodayCount = result.tip_today_count || 0;
         this.fioPending.tipsUrl = result.tips_url || "";
+        this.fioPending.bankEnabled = Boolean(result.bank_enabled);
+        this.fioPending.rateLimit = result.rate_limit || 30;
+        this.fioPending.nextAllowedAt = Date.now() + (result.next_check_in || 0) * 1000;
     },
 
     /** Načte ze serveru QR platby této pokladny ve stavu „Čeká na banku“ (počet + seznam pro popup). */
@@ -51,16 +61,51 @@ patch(PosStore.prototype, {
         }
     },
 
-    /** Tlačítko v popupu: stáhnout nové pohyby z Fio (limit 30 s), spárovat čekající a obnovit seznam. */
+    /**
+     * Za kolik ms Fio dovolí další dotaz (0 = hned). Metoda, ne getter: getter přidaný patchem
+     * na reaktivní PosStore vracel pořád první spočítanou hodnotu.
+     */
+    fioWaitMs() {
+        return Math.max(0, this.fioPending.nextAllowedAt - Date.now());
+    },
+
+    fioArmAutoRefresh(delayMs) {
+        this.fioPending.autoRefresh = true;
+        clearTimeout(this.fioAutoTimer);
+        this.fioAutoTimer = setTimeout(() => this.fioRefreshFromBank(), delayMs + DUE_MARGIN_MS);
+    },
+
+    fioCancelAutoRefresh() {
+        this.fioPending.autoRefresh = false;
+        clearTimeout(this.fioAutoTimer);
+        this.fioAutoTimer = null;
+    },
+
+    /**
+     * Tlačítko v popupu: stáhnout nové pohyby z Fio, spárovat čekající a obnovit seznam.
+     * Když Fio ještě nedovolí další dotaz (30 s), počká se a načte se samo, jakmile to půjde.
+     */
     async fioRefreshFromBank() {
-        if (!this.config || this.fioPending.loading) {
+        if (!this.config) {
             return;
         }
         if (this.data.network.offline) {
+            this.fioCancelAutoRefresh();
             this.fioPending.message = _t("Pokladna je offline.");
             this.fioPending.messageType = "danger";
             return;
         }
+        const waitMs = this.fioWaitMs();
+        if (waitMs > 0) {
+            this.fioArmAutoRefresh(waitMs);
+            this.fioPending.message = "";
+            return;
+        }
+        if (this.fioPending.loading) {
+            this.fioArmAutoRefresh(1000);
+            return;
+        }
+        clearTimeout(this.fioAutoTimer);
         this.fioPending.loading = true;
         this.fioPending.message = "";
         try {
@@ -69,22 +114,27 @@ patch(PosStore.prototype, {
             this.fioApplyOverview(result);
             const matched = Math.max(0, before - result.count);
             if (result.synced) {
+                this.fioCancelAutoRefresh();
                 this.fioPending.message = matched
                     ? _t("Načteno z banky, spárováno %s.", matched)
                     : _t("Načteno z banky, nic nového ke spárování.");
                 this.fioPending.messageType = matched ? "success" : "";
             } else if (result.wait) {
-                this.fioPending.message = _t("Banka dovolí další dotaz za %s s.", result.wait);
-                this.fioPending.messageType = "warning";
+                // limit obsadil jiný požadavek (cron, druhá pokladna): počkat a zkusit znovu
+                this.fioArmAutoRefresh(result.wait * 1000);
+                this.fioPending.message = "";
             } else if (result.error) {
+                this.fioCancelAutoRefresh();
                 this.fioPending.message = result.error;
                 this.fioPending.messageType = "danger";
             } else {
+                this.fioCancelAutoRefresh();
                 this.fioPending.message = _t("Žádný účet s Fio tokenem u QR metod této pokladny.");
                 this.fioPending.messageType = "warning";
             }
         } catch (error) {
             console.warn("Fio: načtení z banky selhalo", error);
+            this.fioCancelAutoRefresh();
             this.fioPending.message = _t("Načtení z banky selhalo.");
             this.fioPending.messageType = "danger";
         } finally {

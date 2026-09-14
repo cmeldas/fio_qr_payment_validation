@@ -278,6 +278,13 @@ class TestFioMatching(CommonPosTest):
             res3 = method.fio_check_qr_payment(77.0, "Order 300-1-000002", self.currency_id)
             self.assertFalse(res3["confirmed"], "rezervovaný pohyb nedostane jiná objednávka")
             self.assertGreater(res3["next_check_in"], 0)
+            self.assertFalse(res3["synced"], "do 30 s se Fio nevolá, pokladna jen odpočítává")
+            self.assertEqual(res3["rate_limit"], 30)
+        self.bank_account.fio_last_request_at = False
+        with patch.object(fio_api, "fetch_last", return_value=[]):
+            res4 = method.fio_check_qr_payment(77.0, "Order 300-1-000002", self.currency_id)
+        self.assertTrue(res4["synced"], "po uplynutí limitu se stáhne z banky a ukazatel začne od plna")
+        self.assertGreaterEqual(res4["next_check_in"], 30)
         tx = self.env["fio.bank.transaction"].browse(res["transaction_id"])
         self.assertEqual(tx.reserved_reference, "Order 300-1-000001")
         self.assertEqual(tx.state, "new")
@@ -544,6 +551,10 @@ class TestFioMatching(CommonPosTest):
             fetch_last.assert_not_called()
         self.assertFalse(again["synced"])
         self.assertGreater(again["wait"], 0, "do 30 s od posledního dotazu se hlásí čekání")
+        self.assertEqual(again["next_check_in"], again["wait"], "odpočet v popupu = čekání na Fio")
+        self.assertTrue(again["bank_enabled"])
+        self.assertEqual(again["rate_limit"], 30)
+        self.assertFalse(Payment.fio_pending_overview(self.pos_config_eur.id)["bank_enabled"])
 
         self.bank_account.fio_last_request_at = False
         with patch.object(fio_api, "fetch_last", side_effect=fio_api.FioApiError("Fio API: HTTP 500 – token")):

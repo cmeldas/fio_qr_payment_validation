@@ -3,6 +3,7 @@ from datetime import timedelta
 
 from odoo import fields, models
 
+from .fio_api import RATE_LIMIT_SECONDS
 from .fio_bank_transaction import AMOUNT_TOLERANCE, TIP_MAX_RATIO
 
 
@@ -22,7 +23,7 @@ class PosPaymentMethod(models.Model):
         bank = self.sudo().journal_id.bank_account_id
         if not bank or not bank.fio_api_token:
             return {"enabled": False}
-        bank.fio_sync_recent()
+        synced = bank.fio_sync_recent()
         Transaction = self.env["fio.bank.transaction"].sudo()
         candidates = Transaction.search([
             ("bank_account_id", "=", bank.id),
@@ -60,5 +61,8 @@ class PosPaymentMethod(models.Model):
         return {
             "enabled": True,
             "confirmed": False,
+            # pro odpočet v pokladně: právě teď staženo z banky? a za kolik sekund to jde znovu
+            "synced": bool(synced),
             "next_check_in": bank._fio_seconds_until_allowed(),
+            "rate_limit": RATE_LIMIT_SECONDS,
         }
