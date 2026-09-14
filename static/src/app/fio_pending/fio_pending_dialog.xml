@@ -38,6 +38,17 @@
                 Zobrazeno <t t-esc="props.payments.length"/> z <t t-esc="props.count"/>; všechny jsou v administraci
                 (Prodejní místo › Objednávky › QR platby ke kontrole).
             </div>
+            <div class="fio-tips-today d-flex flex-wrap align-items-center gap-2 mt-3 pt-2 border-top">
+                <span>
+                    <i class="fa fa-gift text-success me-1" role="img" aria-label="Dýška"/>
+                    <span class="fw-bold">Dýška dnes: </span>
+                    <span class="fio-tips-today-amount" t-esc="formatAmount(props.tipToday)"/>
+                    <span t-if="props.tipTodayCount" class="text-muted small ms-1">(<t t-esc="props.tipTodayCount"/> QR plateb)</span>
+                </span>
+                <button class="btn btn-link btn-sm p-0 ms-auto fio-tips-link" t-if="props.tipsUrl" t-on-click="openTips">
+                    <i class="fa fa-table me-1" role="img" aria-label="Tabulka"/>Všechna dýška po dnech
+                </button>
+            </div>
             <t t-set-slot="footer">
                 <button class="btn btn-primary" t-on-click="props.close">Zavřít</button>
             </t>

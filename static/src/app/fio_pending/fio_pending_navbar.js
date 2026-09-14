@@ -9,7 +9,7 @@ const REFRESH_MS = 60000;
 
 patch(PosStore.prototype, {
     async setup(...args) {
-        this.fioPending = { count: 0, payments: [], loading: false };
+        this.fioPending = { count: 0, payments: [], tipToday: 0, tipTodayCount: 0, tipsUrl: "", loading: false };
         return super.setup(...args);
     },
 
@@ -23,6 +23,9 @@ patch(PosStore.prototype, {
             const result = await this.data.call("pos.payment", "fio_pending_overview", [this.config.id]);
             this.fioPending.count = result.count;
             this.fioPending.payments = result.payments;
+            this.fioPending.tipToday = result.tip_today || 0;
+            this.fioPending.tipTodayCount = result.tip_today_count || 0;
+            this.fioPending.tipsUrl = result.tips_url || "";
         } catch (error) {
             console.warn("Fio: přehled nespárovaných plateb se nenačetl", error);
         } finally {
@@ -53,6 +56,9 @@ patch(Navbar.prototype, {
         this.env.services.dialog.add(FioPendingDialog, {
             payments: this.pos.fioPending.payments,
             count: this.pos.fioPending.count,
+            tipToday: this.pos.fioPending.tipToday,
+            tipTodayCount: this.pos.fioPending.tipTodayCount,
+            tipsUrl: this.pos.fioPending.tipsUrl,
         });
     },
 });

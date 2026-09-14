@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Párování pohybů Fio s QR platbami pokladny a fakturami. Fio API se nevolá, odpovědi se podstrkují."""
+import ast
 from datetime import date, timedelta
 from unittest.mock import patch
 
@@ -225,6 +226,35 @@ class TestFioMatching(CommonPosTest):
         config.fio_pending_days = 0
         self.assertTrue(any(r["id"] == payment.id for r in Payment.fio_pending_overview(config.id)["payments"]))
         self.assertEqual(Payment.fio_pending_overview(self.pos_config_eur.id)["count"], 0, "jiná pokladna nevidí cizí platby")
+
+    def test_tips_today_and_grouping_fields(self):
+        Payment = self.env["pos.payment"]
+        config = self.pos_config_usd
+        base = Payment.fio_pending_overview(config.id)
+        order = self._order(self.product_80, self.qr_payment_method, pos_reference="Order 261-1-000090")
+        payment = order.payment_ids
+        tx = self._store([fio_transaction(701, date.today(), order.amount_total + 15, "Order 261-1-000090 9")])
+        tx._match_new()
+        self.assertAlmostEqual(tx.tip_amount, 15.0)
+        self.assertEqual(tx.pos_payment_date, payment.payment_date, "den platby se ukládá kvůli seskupení po dnech")
+        self.assertEqual(tx.pos_config_id, config)
+
+        overview = Payment.fio_pending_overview(config.id)
+        self.assertAlmostEqual(overview["tip_today"], base["tip_today"] + 15.0)
+        self.assertEqual(overview["tip_today_count"], base["tip_today_count"] + 1)
+        self.assertEqual(overview["tips_url"], "/odoo/action-fio_qr_payment_validation.action_fio_tips")
+        self.assertEqual(Payment.fio_pending_overview(self.pos_config_eur.id)["tip_today"], 0.0)
+
+        # dýško ze včerejší platby se do „dnes“ nepočítá
+        payment.write({"payment_date": fields.Datetime.now() - timedelta(days=1)})
+        self.assertAlmostEqual(Payment.fio_pending_overview(config.id)["tip_today"], base["tip_today"])
+
+        action = self.env.ref("fio_qr_payment_validation.action_fio_tips")
+        tips = self.env["fio.bank.transaction"].search(ast.literal_eval(action.domain))
+        self.assertIn(tx, tips)
+        tx.action_reset()
+        self.assertEqual(tx.tip_amount, 0.0)
+        self.assertFalse(tx.pos_payment_date)
 
     def test_exact_amount_without_tip(self):
         order = self._order(self.product_80, self.qr_payment_method, pos_reference="Order 261-1-000006")

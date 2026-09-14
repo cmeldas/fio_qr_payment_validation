@@ -116,14 +116,78 @@
                 <separator/>
                 <filter name="incoming" string="Příchozí" domain="[('amount', '>', 0)]"/>
                 <filter name="outgoing" string="Odchozí" domain="[('amount', '&lt;', 0)]"/>
+                <filter name="has_tip" string="S dýškem" domain="[('tip_amount', '>', 0)]"/>
                 <separator/>
                 <filter name="filter_date" string="Datum" date="date"/>
+                <filter name="filter_payment_date" string="Den platby v pokladně" date="pos_payment_date"/>
                 <group>
                     <filter name="group_state" string="Stav" context="{'group_by': 'state'}"/>
                     <filter name="group_match_type" string="Způsob spárování" context="{'group_by': 'match_type'}"/>
                     <filter name="group_month" string="Měsíc" context="{'group_by': 'date:month'}"/>
+                    <filter name="group_tip_day" string="Den platby" context="{'group_by': 'pos_payment_date:day'}"/>
+                    <filter name="group_pos_config" string="Pokladna" context="{'group_by': 'pos_config_id'}"/>
                 </group>
             </search>
+        </field>
+    </record>
+
+    <!-- Dýška z QR plateb: seznam seskupený po dnech, pivot a graf -->
+    <record id="view_fio_tip_list" model="ir.ui.view">
+        <field name="name">fio.bank.transaction.tips.list</field>
+        <field name="model">fio.bank.transaction</field>
+        <field name="priority">40</field>
+        <field name="arch" type="xml">
+            <list string="Dýška z QR plateb" create="0" delete="0" default_order="pos_payment_date desc, id desc">
+                <field name="currency_id" column_invisible="True"/>
+                <field name="pos_payment_date"/>
+                <field name="pos_order_id"/>
+                <field name="pos_config_id" optional="show"/>
+                <field name="counter_name" optional="show"/>
+                <field name="amount" string="Přišlo" optional="show"/>
+                <field name="tip_amount" sum="Dýška celkem"/>
+                <field name="date" string="Datum v bance" optional="hide"/>
+                <field name="message" optional="hide"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_fio_tip_pivot" model="ir.ui.view">
+        <field name="name">fio.bank.transaction.tips.pivot</field>
+        <field name="model">fio.bank.transaction</field>
+        <field name="arch" type="xml">
+            <pivot string="Dýška z QR plateb" sample="1">
+                <field name="pos_payment_date" type="row" interval="day"/>
+                <field name="tip_amount" type="measure"/>
+            </pivot>
+        </field>
+    </record>
+
+    <record id="view_fio_tip_graph" model="ir.ui.view">
+        <field name="name">fio.bank.transaction.tips.graph</field>
+        <field name="model">fio.bank.transaction</field>
+        <field name="arch" type="xml">
+            <graph string="Dýška z QR plateb" type="bar" sample="1">
+                <field name="pos_payment_date" interval="day"/>
+                <field name="tip_amount" type="measure"/>
+            </graph>
+        </field>
+    </record>
+
+    <record id="action_fio_tips" model="ir.actions.act_window">
+        <field name="name">Dýška z QR plateb</field>
+        <field name="res_model">fio.bank.transaction</field>
+        <field name="view_mode">list,pivot,graph,form</field>
+        <field name="domain">[('tip_amount', '>', 0)]</field>
+        <field name="context">{'search_default_group_tip_day': 1, 'pivot_measures': ['tip_amount']}</field>
+        <field name="view_ids" eval="[(5, 0, 0),
+            (0, 0, {'view_mode': 'list', 'view_id': ref('view_fio_tip_list')}),
+            (0, 0, {'view_mode': 'pivot', 'view_id': ref('view_fio_tip_pivot')}),
+            (0, 0, {'view_mode': 'graph', 'view_id': ref('view_fio_tip_graph')}),
+            (0, 0, {'view_mode': 'form', 'view_id': ref('view_fio_bank_transaction_form')})]"/>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">Zatím žádná dýška</p>
+            <p>Sem spadne rozdíl, když plátce pošle přes QR víc, než stála objednávka. Seskupeno po dnech
+               platby v pokladně; přepnutím na pivot nebo graf uvidíš součty po týdnech či měsících.</p>
         </field>
     </record>
 

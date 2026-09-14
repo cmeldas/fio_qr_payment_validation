@@ -15,11 +15,22 @@ export class FioPendingDialog extends Component {
         close: Function,
         payments: Array,
         count: Number,
+        tipToday: { type: Number, optional: true },
+        tipTodayCount: { type: Number, optional: true },
+        tipsUrl: { type: String, optional: true },
     };
+    static defaultProps = { tipToday: 0, tipTodayCount: 0, tipsUrl: "" };
 
     setup() {
         this.pos = usePos();
         this.title = _t("QR platby čekající na banku");
+    }
+
+    /** Přehled všech dýšek po dnech (administrace) v nové záložce. */
+    openTips() {
+        if (this.props.tipsUrl) {
+            window.open(this.props.tipsUrl, "_blank");
+        }
     }
 
     formatDate(value) {

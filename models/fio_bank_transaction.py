@@ -67,6 +67,9 @@ class FioBankTransaction(models.Model):
     )
     pos_payment_id = fields.Many2one("pos.payment", string="Platba v pokladně", ondelete="set null", index=True)
     pos_order_id = fields.Many2one(related="pos_payment_id.pos_order_id", string="Objednávka")
+    # uložené kvůli seskupování dýšek po dnech prodeje a po pokladnách
+    pos_payment_date = fields.Datetime(related="pos_payment_id.payment_date", string="Datum platby", store=True)
+    pos_config_id = fields.Many2one(related="pos_payment_id.pos_order_id.config_id", string="Pokladna", store=True)
     move_id = fields.Many2one("account.move", string="Faktura", ondelete="set null", index=True)
     payment_id = fields.Many2one("account.payment", string="Zaregistrovaná platba", ondelete="set null")
     reserved_reference = fields.Char(

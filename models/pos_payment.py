@@ -1,7 +1,11 @@
 # -*- coding: utf-8 -*-
-from datetime import timedelta
+from datetime import datetime, time, timedelta
+
+import pytz
 
 from odoo import api, fields, models
+
+TIPS_ACTION_XMLID = "fio_qr_payment_validation.action_fio_tips"
 
 FIO_STATES = [
     ("none", "Bez ověření"),
@@ -106,8 +110,12 @@ class PosPayment(models.Model):
             since = fields.Datetime.now() - timedelta(days=config.fio_pending_days)
             domain.append(("payment_date", ">=", since))
         payments = self.sudo().search(domain, order="payment_date desc, id desc", limit=limit)
+        tip_today, tip_today_count = self._fio_tips_today(config)
         return {
             "count": self.sudo().search_count(domain),
+            "tip_today": tip_today,
+            "tip_today_count": tip_today_count,
+            "tips_url": f"/odoo/action-{TIPS_ACTION_XMLID}",
             "payments": [
                 {
                     "id": payment.id,
@@ -122,6 +130,33 @@ class PosPayment(models.Model):
                 for payment in payments
             ],
         }
+
+    @api.model
+    def _fio_today_bounds(self):
+        """Začátek a konec dnešního dne uživatele (časová zóna z kontextu / uživatele) v UTC."""
+        tz = pytz.timezone(self.env.context.get("tz") or self.env.user.tz or "UTC")
+        today = fields.Date.context_today(self)
+        start = tz.localize(datetime.combine(today, time.min)).astimezone(pytz.utc).replace(tzinfo=None)
+        return start, start + timedelta(days=1)
+
+    @api.model
+    def _fio_tips_today(self, config):
+        """Součet a počet dýšek z QR plateb této pokladny zaplacených dnes (podle dne platby v pokladně)."""
+        if not config:
+            return 0.0, 0
+        start, end = self._fio_today_bounds()
+        rows = self.env["fio.bank.transaction"].sudo()._read_group(
+            [
+                ("tip_amount", ">", 0),
+                ("pos_config_id", "=", config.id),
+                ("pos_payment_date", ">=", start),
+                ("pos_payment_date", "<", end),
+            ],
+            [],
+            ["tip_amount:sum", "__count"],
+        )
+        total, count = rows[0] if rows else (0.0, 0)
+        return total or 0.0, count or 0
 
     def action_fio_confirm_manual(self):
         self.write({"fio_state": "manual", "fio_confirmed_at": fields.Datetime.now()})
