@@ -6,31 +6,22 @@ import { _t } from "@web/core/l10n/translation";
 
 /**
  * Seznam QR plateb, které banka ještě nepotvrdila (stav „Čeká na banku“), pro obsluhu
- * pokladny: datum a čas, číslo objednávky, částka, proklik na objednávku v seznamu účtenek.
+ * pokladny: datum a čas, číslo objednávky, částka, proklik na objednávku v seznamu účtenek,
+ * dýška za dnešek a tlačítko „Načíst platby z banky“. Data čte přímo z `pos.fioPending`,
+ * takže se seznam po načtení z banky sám překreslí.
  */
 export class FioPendingDialog extends Component {
     static template = "fio_qr_payment_validation.FioPendingDialog";
     static components = { Dialog };
-    static props = {
-        close: Function,
-        payments: Array,
-        count: Number,
-        tipToday: { type: Number, optional: true },
-        tipTodayCount: { type: Number, optional: true },
-        tipsUrl: { type: String, optional: true },
-    };
-    static defaultProps = { tipToday: 0, tipTodayCount: 0, tipsUrl: "" };
+    static props = { close: Function };
 
     setup() {
         this.pos = usePos();
         this.title = _t("QR platby čekající na banku");
     }
 
-    /** Přehled všech dýšek po dnech (administrace) v nové záložce. */
-    openTips() {
-        if (this.props.tipsUrl) {
-            window.open(this.props.tipsUrl, "_blank");
-        }
+    get pending() {
+        return this.pos.fioPending;
     }
 
     formatDate(value) {
@@ -38,11 +29,22 @@ export class FioPendingDialog extends Component {
     }
 
     formatAmount(value) {
-        return this.env.utils.formatCurrency(value);
+        return this.env.utils.formatCurrency(value || 0);
     }
 
     orderLabel(row) {
         return row.pos_reference || row.order_name || row.tracking_number || "";
+    }
+
+    async refreshFromBank() {
+        await this.pos.fioRefreshFromBank();
+    }
+
+    /** Přehled všech dýšek po dnech (administrace) v nové záložce. */
+    openTips() {
+        if (this.pending.tipsUrl) {
+            window.open(this.pending.tipsUrl, "_blank");
+        }
     }
 
     openOrder(row) {

@@ -485,13 +485,70 @@ class TestFioMatching(CommonPosTest):
             self.env["res.partner.bank"]._cron_fio_history_step()
         self.assertTrue(bank.fio_history_running, "po limitu 409 import pokračuje dalším krokem")
 
-    def test_hourly_cron_syncs_and_matches(self):
+    def test_cron_syncs_and_matches(self):
         order = self._order(self.product_80, self.qr_payment_method, pos_reference="Order 261-1-000077")
         payment = order.payment_ids
         items = fio_api.parse_transactions(fio_payload([
             fio_transaction(601, date.today(), order.amount_total, "Order 261-1-000077 3"),
         ]))
+        self.bank_account.fio_last_sync_at = False  # nikdy nestaženo → stahuje se i bez běžící pokladny
         with patch.object(fio_api, "fetch_last", return_value=items):
             self.env["res.partner.bank"]._cron_fio_sync()
         self.assertEqual(payment.fio_state, "confirmed")
         self.assertEqual(payment.fio_transaction_id.fio_id, "601")
+
+    def test_cron_every_5_minutes_only_while_pos_runs(self):
+        bank = self.bank_account
+        Bank = self.env["res.partner.bank"]
+        self.env["pos.config"].search([]).write({"fio_pos_last_seen": False})
+        bank.write({"fio_last_sync_at": fields.Datetime.now() - timedelta(minutes=10), "fio_last_request_at": False})
+        with patch.object(fio_api, "fetch_last", return_value=[]) as fetch_last:
+            Bank._cron_fio_sync()
+            fetch_last.assert_not_called()  # žádná pokladna neběží a poslední stažení je čerstvé
+        bank.write({"fio_last_sync_at": fields.Datetime.now() - timedelta(minutes=61), "fio_last_request_at": False})
+        with patch.object(fio_api, "fetch_last", return_value=[]) as fetch_last:
+            Bank._cron_fio_sync()
+            fetch_last.assert_called_once()  # po hodině se stáhne i bez pokladny
+        bank.write({"fio_last_sync_at": fields.Datetime.now(), "fio_last_request_at": False})
+        self.env["pos.payment"].fio_pending_overview(self.pos_config_usd.id)  # lišta pokladny se ohlásila
+        self.assertTrue(self.pos_config_usd.fio_pos_last_seen)
+        self.assertTrue(self.env["pos.config"]._fio_pos_active())
+        with patch.object(fio_api, "fetch_last", return_value=[]) as fetch_last:
+            Bank._cron_fio_sync()
+            fetch_last.assert_called_once()  # pokladna běží → stahuje se každých 5 minut
+        self.pos_config_usd.fio_pos_last_seen = fields.Datetime.now() - timedelta(minutes=15)
+        self.assertFalse(self.env["pos.config"]._fio_pos_active(), "po 10 minutách bez ohlášení se pokladna bere jako uspaná")
+        cron = self.env.ref("fio_qr_payment_validation.cron_fio_sync")
+        self.assertEqual((cron.interval_number, cron.interval_type), (5, "minutes"))
+
+    def test_refresh_from_bank_button(self):
+        Payment = self.env["pos.payment"]
+        config = self.pos_config_usd
+        order = self._order(self.product_80, self.qr_payment_method, pos_reference="Order 261-1-000066")
+        payment = order.payment_ids
+        before = Payment.fio_pending_overview(config.id)["count"]
+        items = fio_api.parse_transactions(fio_payload([
+            fio_transaction(801, date.today(), order.amount_total, "Order 261-1-000066 1"),
+        ]))
+        self.bank_account.fio_last_request_at = False
+        with patch.object(fio_api, "fetch_last", return_value=items) as fetch_last:
+            result = Payment.fio_refresh_from_bank(config.id)
+            fetch_last.assert_called_once()
+        self.assertTrue(result["synced"])
+        self.assertEqual(result["count"], before - 1)
+        self.assertEqual(payment.fio_state, "confirmed")
+        self.assertTrue(config.fio_pos_last_seen)
+
+        with patch.object(fio_api, "fetch_last", return_value=[]) as fetch_last:
+            again = Payment.fio_refresh_from_bank(config.id)
+            fetch_last.assert_not_called()
+        self.assertFalse(again["synced"])
+        self.assertGreater(again["wait"], 0, "do 30 s od posledního dotazu se hlásí čekání")
+
+        self.bank_account.fio_last_request_at = False
+        with patch.object(fio_api, "fetch_last", side_effect=fio_api.FioApiError("Fio API: HTTP 500 – token")):
+            failed = Payment.fio_refresh_from_bank(config.id)
+        self.assertFalse(failed["synced"])
+        self.assertIn("500", failed["error"])
+
+        self.assertEqual(Payment.fio_refresh_from_bank(self.pos_config_eur.id)["wait"], 0, "pokladna bez QR metody s Fio")

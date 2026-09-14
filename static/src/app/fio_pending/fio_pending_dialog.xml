@@ -3,11 +3,17 @@
 
     <t t-name="fio_qr_payment_validation.FioPendingDialog">
         <Dialog size="'md'" title="title">
-            <div t-if="!props.payments.length" class="text-muted py-3 text-center">
+            <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+                <button class="btn btn-secondary fio-refresh-btn" t-on-click="refreshFromBank" t-att-disabled="pending.loading">
+                    <i class="fa fa-refresh me-1" t-att-class="{ 'fa-spin': pending.loading }" role="img" aria-label="Načíst"/>Načíst platby z banky
+                </button>
+                <span t-if="pending.message" class="small fio-refresh-message" t-att-class="{ 'text-success': pending.messageType === 'success', 'text-warning': pending.messageType === 'warning', 'text-danger': pending.messageType === 'danger', 'text-muted': !pending.messageType }" t-esc="pending.message"/>
+            </div>
+            <div t-if="!pending.payments.length" class="text-muted py-3 text-center">
                 <i class="fa fa-check-circle text-success me-1" role="img" aria-label="OK"/>
                 Žádné QR platby nečekají na banku.
             </div>
-            <div t-else="" class="fio-pending-list overflow-auto" style="max-height: 60vh;">
+            <div t-else="" class="fio-pending-list overflow-auto" style="max-height: 55vh;">
                 <table class="table table-sm align-middle mb-0">
                     <thead>
                         <tr>
@@ -18,7 +24,7 @@
                         </tr>
                     </thead>
                     <tbody>
-                        <tr t-foreach="props.payments" t-as="row" t-key="row.id" class="fio-pending-row">
+                        <tr t-foreach="pending.payments" t-as="row" t-key="row.id" class="fio-pending-row">
                             <td class="text-nowrap" t-esc="formatDate(row.payment_date)"/>
                             <td>
                                 <div class="fw-bold" t-esc="orderLabel(row)"/>
@@ -34,18 +40,18 @@
                     </tbody>
                 </table>
             </div>
-            <div t-if="props.count > props.payments.length" class="small text-muted mt-2">
-                Zobrazeno <t t-esc="props.payments.length"/> z <t t-esc="props.count"/>; všechny jsou v administraci
+            <div t-if="pending.count > pending.payments.length" class="small text-muted mt-2">
+                Zobrazeno <t t-esc="pending.payments.length"/> z <t t-esc="pending.count"/>; všechny jsou v administraci
                 (Prodejní místo › Objednávky › QR platby ke kontrole).
             </div>
             <div class="fio-tips-today d-flex flex-wrap align-items-center gap-2 mt-3 pt-2 border-top">
                 <span>
                     <i class="fa fa-gift text-success me-1" role="img" aria-label="Dýška"/>
                     <span class="fw-bold">Dýška dnes: </span>
-                    <span class="fio-tips-today-amount" t-esc="formatAmount(props.tipToday)"/>
-                    <span t-if="props.tipTodayCount" class="text-muted small ms-1">(<t t-esc="props.tipTodayCount"/> QR plateb)</span>
+                    <span class="fio-tips-today-amount" t-esc="formatAmount(pending.tipToday)"/>
+                    <span t-if="pending.tipTodayCount" class="text-muted small ms-1">(<t t-esc="pending.tipTodayCount"/> QR plateb)</span>
                 </span>
-                <button class="btn btn-link btn-sm p-0 ms-auto fio-tips-link" t-if="props.tipsUrl" t-on-click="openTips">
+                <button class="btn btn-link btn-sm p-0 ms-auto fio-tips-link" t-if="pending.tipsUrl" t-on-click="openTips">
                     <i class="fa fa-table me-1" role="img" aria-label="Tabulka"/>Všechna dýška po dnech
                 </button>
             </div>

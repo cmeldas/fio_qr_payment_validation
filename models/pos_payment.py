@@ -105,6 +105,7 @@ class PosPayment(models.Model):
         v popupu; rozsah dní zpět určuje nastavení pokladny „Nespárované QR platby: dny zpět“.
         """
         config = self.env["pos.config"].browse(config_id).exists()
+        config._fio_heartbeat()
         domain = [("fio_state", "=", "pending"), ("pos_order_id.config_id", "=", config.id)]
         if config and config.fio_pending_days > 0:
             since = fields.Datetime.now() - timedelta(days=config.fio_pending_days)
@@ -130,6 +131,37 @@ class PosPayment(models.Model):
                 for payment in payments
             ],
         }
+
+    @api.model
+    def fio_refresh_from_bank(self, config_id):
+        """Tlačítko „Načíst platby z banky“ v pokladně: stáhne nové pohyby z Fio pro účty QR metod
+        této pokladny (limit 30 s), spáruje čekající platby a vrátí obnovený přehled.
+
+        `synced` – dotaz na Fio proběhl; `wait` – za kolik sekund Fio dovolí další dotaz;
+        `error` – poslední chyba Fio (např. neplatný token).
+        """
+        config = self.env["pos.config"].sudo().browse(config_id).exists()
+        result = {"synced": False, "wait": 0, "error": ""}
+        if config:
+            config._fio_heartbeat()
+            banks = config.payment_method_ids.filtered(
+                lambda m: m.payment_method_type == "qr_code" or m.qr_code_method
+            ).journal_id.bank_account_id.filtered("fio_api_token")
+            for bank in banks:
+                wait = bank._fio_seconds_until_allowed()
+                if wait:
+                    result["wait"] = max(result["wait"], wait)
+                    continue
+                if bank.fio_sync_recent():
+                    result["synced"] = True
+                elif bank.fio_last_error:
+                    result["error"] = bank.fio_last_error
+                else:
+                    # zarážka `last` se právě nastavila nebo účet dotazuje někdo jiný: zkusit za chvíli
+                    result["wait"] = max(result["wait"], bank._fio_seconds_until_allowed() or 30)
+            self.env["fio.bank.transaction"].sudo()._match_pending()
+        result.update(self.fio_pending_overview(config_id))
+        return result
 
     @api.model
     def _fio_today_bounds(self):

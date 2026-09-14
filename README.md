@@ -11,10 +11,10 @@ průběžně a při shodě platbu **potvrdí sám** – obsluze i zákazníkovi 
 | Kde                       | Co se děje                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Pokladna, otevřený QR kód | Každých 5 s se pokladna ptá serveru; server stáhne nové pohyby z Fio (nejvýš jednou za 30 s) a hledá příchozí pohyb, který platbu pokrývá (stejná částka nebo vyšší o dýško) a má číslo objednávky ve zprávě. Při shodě: zelené „Automaticky potvrzeno“ (s výší dýška) a banner „Platba přijata“ na zákaznickém displeji – obojí zůstává, dokud obsluha neklikne na „Potvrdit platbu“ (zelené tlačítko). Ruční potvrzení bez čekání na banku je dál možné. |
-| Lišta pokladny            | Ikona peněz s červeným počtem QR plateb této pokladny, které banka ještě nepotvrdila (za posledních N dní podle nastavení pokladny, výchozí 14). Kliknutím popup s datem a časem, číslem objednávky, částkou a tlačítkem _Detail_ (otevře objednávku v seznamu účtenek); dole **Dýška dnes** (součet dýšek z dnešních QR plateb této pokladny) a odkaz na přehled všech dýšek. Počet se obnovuje po každém uložení objednávky a každou minutu; platba zmizí po spárování bankou, ručním potvrzení nebo ignorování v administraci. |
+| Lišta pokladny            | Ikona peněz s červeným počtem QR plateb této pokladny, které banka ještě nepotvrdila (za posledních N dní podle nastavení pokladny, výchozí 14). Kliknutím popup s datem a časem, číslem objednávky, částkou a tlačítkem _Detail_ (otevře objednávku v seznamu účtenek); tlačítko **Načíst platby z banky** stáhne nové pohyby hned (Fio dovolí dotaz jednou za 30 s, jinak popup napíše, za kolik sekund to půjde) a spáruje čekající; dole **Dýška dnes** (součet dýšek z dnešních QR plateb této pokladny) a odkaz na přehled všech dýšek. Počet se obnovuje po každém uložení objednávky a každou minutu; platba zmizí po spárování bankou, ručním potvrzení nebo ignorování v administraci. |
 | Dýška                     | _Prodejní místo › Objednávky › Dýška z QR plateb_: pohyby, které přišly vyšší než objednávka, seskupené **po dnech platby v pokladně** se součty; přepínání na pivot (po dnech / týdnech / měsících) a graf, filtr podle pokladny.                                                                                                                                                                                                                                  |
 | Uložení objednávky        | Nová QR platba dostane stav **Čeká na banku**. Když už pohyb existuje (rozpoznaný při otevřeném QR nebo stažený cronem), spáruje se hned → **Potvrzeno bankou**.                                                                                                                                                                                                                                                                                           |
-| Cron každou hodinu        | Stáhne nové pohyby (`last`) a spáruje vše, co čeká – včetně plateb potvrzených ručně v pokladně a plateb z víkendu, které banka pošle až v pondělí.                                                                                                                                                                                                                                                                                                        |
+| Cron každých 5 minut      | Stáhne nové pohyby (`last`) a spáruje vše, co čeká – včetně plateb potvrzených ručně v pokladně a plateb z víkendu, které banka pošle až v pondělí. Fio se ptá jen když některá pokladna běží (lišta pokladny se hlásí každou minutu, bere se 10 minut zpět); uspaný nebo vypnutý počítač s pokladnou se nehlásí a pak se stahuje jen jednou za hodinu. Ručně potvrzená platba se tak při otevřené pokladně spáruje do 5 minut od připsání. |
 | Faktury                   | Příchozí pohyb s variabilním symbolem = platební reference vystavené faktury: na faktuře se **zaregistruje platba** do bankovního deníku účtu (částka a datum z pohybu). Už uhrazená faktura se jen propojí.                                                                                                                                                                                                                                               |
 | Historie                  | Po instalaci jde stáhnout celá historie účtu po 90denních blocích (mezi bloky pauza kvůli limitu Fio) a spárovat i staré platby.                                                                                                                                                                                                                                                                                                                           |
 
@@ -75,9 +75,10 @@ Jeden token má u Fio jednu zarážku `last`. Když stejný token používá lok
 i produkce, přetahují se o ni a část pohybů dostane jen jedna strana – pro lokální testy
 vydat druhý token, nebo ho z lokální databáze po testu smazat.
 
-Cron **Fio: stáhnout nové pohyby a spárovat platby** běží každou hodinu (Nastavení ›
-Technické › Naplánované akce). Ručně: tlačítka **Načíst nové pohyby** a **Spárovat čekající**
-na účtu.
+Cron **Fio: stáhnout nové pohyby a spárovat platby** běží každých 5 minut (Nastavení ›
+Technické › Naplánované akce), Fio ale volá jen při běžící pokladně, jinak po hodině. Ručně:
+tlačítka **Načíst nové pohyby** a **Spárovat čekající** na účtu, nebo **Načíst platby z banky**
+v popupu pokladny.
 
 ## Limity Fio API
 
@@ -124,7 +125,10 @@ v poli „Poslední chyba Fio“:
   pokladna posílá `qrPaymentData.fioConfirmed`.
 - Nastavení pokladny: _Nespárované QR platby: dny zpět_ (`pos.config.fio_pending_days`,
   výchozí 14, 0 = bez omezení) určuje, co ikona v liště počítá; data dodává
-  `pos.payment.fio_pending_overview(config_id)`.
+  `pos.payment.fio_pending_overview(config_id)`, tlačítko v popupu
+  `pos.payment.fio_refresh_from_bank(config_id)`. Každý dotaz lišty zapíše heartbeat
+  `pos.config.fio_pos_last_seen` (nejvýš po 30 s); cron podle něj pozná běžící pokladnu.
+- Aktualizace z 19.0.1.0.0: migrace přepne cron z hodiny na 5 minut (záznam je `noupdate`).
 - Instalace (`post_init_hook`): všechny dosavadní QR platby → _Čeká na banku_; „Historie od“
   na účtu deníku QR metody.
 - Pokladna Odoo 19 načítá u `pos.payment` **všechna pole** (`_load_pos_data_fields` vrací `[]`)

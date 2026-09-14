@@ -18,6 +18,8 @@ HISTORY_STEP_DELAY_SECONDS = 35
 # Nový token nemá zarážku pro `last` a Fio by sáhlo do celé historie (HTTP 422);
 # první stažení proto napřed nastaví zarážku takto daleko zpět (musí být pod 90 dní).
 LAST_INIT_DAYS = 85
+# Cron běží každých 5 minut; když žádná pokladna neběží (uspaný notebook), stačí stahovat po hodině.
+IDLE_SYNC_MINUTES = 60
 
 
 class ResPartnerBank(models.Model):
@@ -294,13 +296,24 @@ class ResPartnerBank(models.Model):
         _logger.info("Fio %s: import historie dokončen", bank.display_name)
 
     # ------------------------------------------------------------------
-    # Hodinový cron
+    # Cron každých 5 minut
     # ------------------------------------------------------------------
     @api.model
     def _cron_fio_sync(self):
+        """Stáhne nové pohyby a spáruje čekající platby.
+
+        Fio se ptá při každém běhu (5 minut), jen když některá pokladna běží – hlásí se z lišty
+        každou minutu, viz `pos.config._fio_pos_active`. Uspaný nebo vypnutý počítač s pokladnou
+        se nehlásí a stahuje se pak nejvýš jednou za hodinu.
+        """
+        now = fields.Datetime.now()
+        pos_active = self.env["pos.config"]._fio_pos_active()
         for bank in self.sudo().search([("fio_api_token", "!=", False), ("fio_history_running", "=", False)]):
             if bank.fio_history_set_last_id:
                 continue  # zarážku ještě řeší cron historie
+            idle_due = not bank.fio_last_sync_at or bank.fio_last_sync_at <= now - timedelta(minutes=IDLE_SYNC_MINUTES)
+            if not (pos_active or idle_due):
+                continue
             bank.fio_sync_recent()
         self.env["fio.bank.transaction"].sudo()._match_pending()
 
