@@ -272,6 +272,42 @@ class TestFioMatching(CommonPosTest):
         self.assertEqual(tx.tip_amount, 0.0)
         self.assertFalse(tx.pos_payment_date)
 
+    def test_ignored_payment_matched_by_reference_when_money_arrives_later(self):
+        """Obsluha platbu ignorovala (peníze nepřišly), zákazník zaplatil o dny později: spáruje se podle čísla objednávky."""
+        order = self._order(self.product_80, self.qr_payment_method, pos_reference="2611-1-000333")
+        payment = order.payment_ids
+        payment.action_fio_ignore()
+        self.assertEqual(payment.fio_state, "ignored")
+        # QR zpráva bez mezer: Order + číslo objednávky + tracking
+        tx = self._store([fio_transaction(950, date.today() + timedelta(days=3), order.amount_total, "Order2611-1-00033311333",
+                                          ident="Theodor Petřík")])
+        tx._match_new()
+        self.assertEqual(tx.state, "matched")
+        self.assertEqual(tx.match_type, "reference")
+        self.assertEqual(tx.pos_payment_id, payment)
+        self.assertEqual(payment.fio_state, "confirmed")
+        self.assertTrue(tx.note, "u pohybu je poznámka, že platba byla ignorovaná")
+
+    def test_ignored_payment_not_matched_by_amount_only(self):
+        """Bez čísla objednávky ve zprávě se ignorovaná platba nepáruje (ani cronem, ani ručním průvodcem předvyplněním)."""
+        order = self._order(self.product_80, self.qr_payment_method, pos_reference="Order 261-1-000444")
+        payment = order.payment_ids
+        payment.action_fio_ignore()
+        tx = self._store([fio_transaction(951, date.today(), order.amount_total, "bez cisla objednavky")])
+        tx._match_new()
+        self.env["fio.bank.transaction"]._match_pending()
+        self.assertEqual(tx.state, "new")
+        self.assertEqual(payment.fio_state, "ignored")
+
+    def test_pending_payment_preferred_over_ignored(self):
+        older = self._order(self.product_80, self.qr_payment_method, pos_reference="Order 261-1-000555")
+        newer = self._order(self.product_80, self.qr_payment_method, pos_reference="Order 261-1-000555")
+        newer.payment_ids.action_fio_ignore()
+        tx = self._store([fio_transaction(952, date.today(), older.amount_total, "Order 261-1-000555 5")])
+        tx._match_new()
+        self.assertEqual(tx.pos_payment_id, older.payment_ids, "čekající platba má přednost před ignorovanou, i když je starší")
+        self.assertEqual(newer.payment_ids.fio_state, "ignored")
+
     def test_exact_amount_without_tip(self):
         order = self._order(self.product_80, self.qr_payment_method, pos_reference="Order 261-1-000006")
         tx = self._store([fio_transaction(110, date.today(), order.amount_total, "Order 261-1-000006 6")])

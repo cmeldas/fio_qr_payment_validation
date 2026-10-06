@@ -25,7 +25,7 @@ průběžně a při shodě platbu **potvrdí sám** – obsluze i zákazníkovi 
 | Čeká na banku    | Platba potvrzená obsluhou, banka pohyb ještě neposlala. Je v přehledu **QR platby ke kontrole**.                                                     |
 | Potvrzeno bankou | K platbě je spárovaný pohyb na účtu.                                                                                                                 |
 | Potvrzeno ručně  | Obsluha/manažer platbu zkontroloval jinak (výpis, potvrzení plátce). Cron ji dál zkouší spárovat; když pohyb dorazí, změní se na _Potvrzeno bankou_. |
-| Ignorováno       | Vědomě vyřazeno z kontroly (storno, chybný záznam).                                                                                                  |
+| Ignorováno       | Vědomě vyřazeno z kontroly (storno, chybný záznam, peníze nepřišly). Když peníze s číslem objednávky ve zprávě přece jen dorazí, platba se spáruje a přejde na _Potvrzeno bankou_ (u pohybu poznámka). |
 
 Potvrzení v pokladně („Potvrdit platbu“ u QR kódu) **není** kontrola – platba jen odejde na
 pozadí do stavu _Čeká na banku_.
@@ -38,7 +38,9 @@ pozadí do stavu _Čeká na banku_.
    Hledá se celé `pos_reference` (`order00275-006-0114`) i jen jeho poslední část
    (`00275-006-0114`), takže sedí zprávy z Odoo 18 („Objednávka …“) i 19 („Order …“) a i když
    plátce začátek zprávy přepíše; před číslem nesmí být další číslice („61-1-000005“ nesedí na
-   „261-1-000005“). Rozdíl se uloží k pohybu jako **Dýško** (vidět i u platby).
+   „261-1-000005“). Rozdíl se uloží k pohybu jako **Dýško** (vidět i u platby). Podle čísla
+   objednávky se párují i **ignorované** platby – zákazník občas zaplatí až o dny později; když
+   textu odpovídá čekající i ignorovaná platba, má přednost čekající.
 2. **Při otevřeném QR** navíc platí záložní pravidlo: když číslo objednávky ve zprávě chybí,
    ale existuje **právě jeden** dnešní nebo včerejší nespárovaný pohyb v částce platby až
    platby + 50 % (dýško bez čísla objednávky), bere se jako platba probíhající objednávky

@@ -158,9 +158,14 @@ class FioBankTransaction(models.Model):
         )
 
     def _pos_payment_ids_by_text(self):
-        """Id čekajících plateb, jejichž číslo objednávky (poslední část `pos_reference`) je
+        """Id nespárovaných plateb, jejichž číslo objednávky (poslední část `pos_reference`) je
         v textu pohybu. Hledá se v SQL, aby cron nad historií neprocházel tisíce plateb v Pythonu;
-        hranici před číslicí pak ověří `_text_matches_reference`."""
+        hranici před číslicí pak ověří `_text_matches_reference`.
+
+        Kromě čekajících a ručně potvrzených bere i ignorované: když peníze s číslem objednávky
+        přece jen dorazí (zákazník zaplatil o dny později), je spárování jednoznačné. Párování
+        jen podle částky se ignorovaných plateb netýká.
+        """
         self.ensure_one()
         text = self._search_text()
         if not text:
@@ -170,7 +175,7 @@ class FioBankTransaction(models.Model):
             SELECT p.id
               FROM pos_payment p
               JOIN pos_order o ON o.id = p.pos_order_id
-             WHERE p.fio_state IN ('pending', 'manual')
+             WHERE p.fio_state IN ('pending', 'manual', 'ignored')
                AND p.amount > 0 AND p.amount <= %s
                AND o.pos_reference IS NOT NULL
                AND length(regexp_replace(o.pos_reference, '^.*\s', '')) >= %s
@@ -201,7 +206,8 @@ class FioBankTransaction(models.Model):
         """Čekající QR platby na náš účet, které pohyb pokrývá (stejná částka nebo vyšší o dýško).
 
         `pos_reference` omezí na jednu objednávku; jinak s `by_text` jen na objednávky, jejichž
-        číslo je v textu pohybu; s `by_text=False` všechny čekající platby (ruční spárování).
+        číslo je v textu pohybu (včetně ignorovaných plateb); s `by_text=False` všechny čekající
+        platby (ruční spárování).
         """
         self.ensure_one()
         Payment = self.env["pos.payment"].sudo()
@@ -235,9 +241,16 @@ class FioBankTransaction(models.Model):
                 self._link_pos_payment(payment, match_type)
                 return True
         candidates = self._pos_candidates()
-        for payment in candidates.sorted(lambda p: p.payment_date or fields.Datetime.now(), reverse=True):
+        # přednost mají čekající / ručně potvrzené platby, ignorované až po nich; v rámci skupiny nejnovější
+        ordered = (
+            candidates.filtered(lambda p: p.fio_state != "ignored").sorted(lambda p: p.payment_date, reverse=True)
+            + candidates.filtered(lambda p: p.fio_state == "ignored").sorted(lambda p: p.payment_date, reverse=True)
+        )
+        for payment in ordered:
             if self._text_matches_reference(payment.pos_order_id.pos_reference):
-                self._link_pos_payment(payment, "reference")
+                note = _("Platba byla ignorovaná, peníze s číslem objednávky přesto dorazily.") \
+                    if payment.fio_state == "ignored" else None
+                self._link_pos_payment(payment, "reference", note=note)
                 return True
         return False
 
