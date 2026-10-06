@@ -55,14 +55,16 @@ lze ručně spárovat (s platbou v pokladně nebo fakturou) nebo ignorovat.
    **sledování účtu** (čtení). Zřízení se silně autorizuje (SMS / push), token má 64 znaků,
    **funguje až 5 minut po autorizaci** a platí nejdéle 180 dní (volitelně se prodlužuje při
    každém přihlášení do bankovnictví); po vypršení vydat nový a přepsat ho v Odoo.
-   **Víc tokenů k jednomu účtu = častější dotazy** (viz Limity Fio API): 2 tokeny 15 s,
-   3 tokeny 10 s, 6 tokenů 5 s.
+   **Víc tokenů k jednomu účtu = častější dotazy** (viz Limity Fio API): 2 tokeny 16 s,
+   3 tokeny 11 s, 6 tokenů 6 s. Platnost tokenu se podle Fio s automatickým prodlužováním
+   obnovuje přihlášením do Internetbankingu nebo Smartbankingu (na 180 dní), ne voláním API.
 2. V Odoo: _Fakturace › Konfigurace › Bankovní účty_ → účet, na který chodí QR platby
    (účet přiřazený bankovnímu deníku platební metody QR) → záložka **Fio** → **API tokeny** →
    *Přidat položku*, název (třeba datum vydání) a token, uložit. Záložku vidí jen správce
    systému; hodnota tokenu se po uložení ukazuje jen jako hvězdičky. Pod seznamem je počet
    aktivních tokenů a skutečný interval mezi dotazy. Token jde dočasně vypnout přepínačem
-   *Aktivní*; u každého je jeho poslední dotaz, zarážka a poslední chyba.
+   *Aktivní* (neaktivní se nevolá); u každého je poslední dotaz, poslední úspěšný dotaz,
+   zarážka a poslední chyba.
 3. **Historie starší 90 dní**: stahuje se **prvním tokenem v seznamu** (pořadí jde přetáhnout).
    Fio ji přes API vydá jen po dočasném odemknutí – v bankovnictví _Nastavení › API_ kliknout
    **u toho tokenu** na **ikonu zámku** a pokyn autorizovat; přístup platí **10 minut** a jen
@@ -94,11 +96,13 @@ banku*, platby potvrzené bankou zůstanou.
 ## Limity Fio API
 
 Fio dovolí **jeden dotaz za 30 s na token** (jinak HTTP 409), a tokenů může být k účtu víc.
-Modul je volá **postupně za sebou** – vždy ten aktivní, který se nejdéle nepoužil – a dotazy
-na účet rozkládá rovnoměrně: **interval = 30 s / počet aktivních tokenů**, zaokrouhleno nahoru,
-nejméně 2 s (1 token 30 s, 2 tokeny 15 s, 3 tokeny 10 s, 4 tokeny 8 s, 6 tokenů 5 s). Žádný
-token se nepoužije dřív než po 30 s, ať se ptá pokladna, cron nebo tlačítko; souběžné požadavky
-řeší zámek řádku účtu. Pokladna při otevřeném QR se ptá serveru přesně ve chvíli dalšího
+Modul volá **všechny aktivní tokeny postupně za sebou** – vždy ten, který se nejdéle nepoužil
+(vystřídají se i při řídkých dotazech a i když některý vrací chybu) – a dotazy
+na účet rozkládá rovnoměrně: **interval = 32 s / počet aktivních tokenů** (30 s limit + 2 s
+rezerva, protože Odoo ukládá čas na celé sekundy a Fio lokálně odmítlo dotaz i po 32 s),
+zaokrouhleno nahoru, nejméně 2 s (1 token 32 s, 2 tokeny 16 s, 3 tokeny 11 s, 4 tokeny 8 s,
+6 tokenů 6 s). Žádný token se nepoužije dřív než po 32 s, ať se ptá pokladna, cron nebo
+tlačítko; souběžné požadavky řeší zámek řádku účtu. Pokladna při otevřeném QR se ptá serveru přesně ve chvíli dalšího
 dotazu (nejpozději po 5 s) a ukazatel s textem „Další kontrola banky za N s (každých M s)“
 ukazuje skutečný interval; stejně tak popup čekajících plateb. Párování mezi dotazy běží nad
 už staženými pohyby.

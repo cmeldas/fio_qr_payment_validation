@@ -21,7 +21,7 @@ HISTORY_STEP_DELAY_SECONDS = 35
 LAST_INIT_DAYS = 85
 # Cron běží každých 5 minut; když žádná pokladna neběží (uspaný notebook), stačí stahovat po hodině.
 IDLE_SYNC_MINUTES = 60
-# Víc tokenů = častější dotazy (30 s / počet tokenů), ale ne častěji než takhle.
+# Víc tokenů = častější dotazy (32 s / počet tokenů), ale ne častěji než takhle.
 MIN_INTERVAL_SECONDS = 2
 
 
@@ -39,8 +39,9 @@ class ResPartnerBank(models.Model):
     fio_token_count = fields.Integer(string="Aktivních tokenů", compute="_compute_fio_interval", compute_sudo=True)
     fio_interval = fields.Integer(
         string="Interval mezi dotazy (s)", compute="_compute_fio_interval", compute_sudo=True,
-        help="Fio dovolí jeden dotaz za 30 s na token; účet volá tokeny postupně za sebou, "
-        "takže interval je 30 s děleno počtem aktivních tokenů (nejméně 2 s).",
+        help="Fio dovolí jeden dotaz za 30 s na token (modul drží 32 s kvůli rezervě); účet volá "
+        "všechny aktivní tokeny postupně za sebou, takže interval je 32 s děleno počtem aktivních "
+        "tokenů (nejméně 2 s).",
     )
     fio_last_request_at = fields.Datetime(string="Poslední dotaz na Fio", readonly=True, copy=False)
     fio_last_sync_at = fields.Datetime(string="Poslední úspěšné stažení", readonly=True, copy=False)
@@ -67,10 +68,14 @@ class ResPartnerBank(models.Model):
 
     @staticmethod
     def _fio_interval_for(token_count):
-        """Sekundy mezi dvěma dotazy na účet při daném počtu aktivních tokenů."""
+        """Sekundy mezi dvěma dotazy na účet při daném počtu aktivních tokenů.
+
+        Zaokrouhleno nahoru, takže jedno kolo přes všechny tokeny trvá aspoň 32 s a každý
+        token je při dalším kole zase volný.
+        """
         if token_count <= 0:
-            return fio_api.RATE_LIMIT_SECONDS
-        return max(MIN_INTERVAL_SECONDS, math.ceil(fio_api.RATE_LIMIT_SECONDS / token_count))
+            return fio_api.TOKEN_GAP_SECONDS
+        return max(MIN_INTERVAL_SECONDS, math.ceil(fio_api.TOKEN_GAP_SECONDS / token_count))
 
     def _compute_fio_transaction_count(self):
         counts = {
@@ -97,7 +102,7 @@ class ResPartnerBank(models.Model):
         return self._fio_interval_for(len(self._fio_tokens()))
 
     def _fio_spacing_wait(self):
-        """Sekundy do dalšího dotazu podle rovnoměrného rozložení mezi tokeny (30 s / počet)."""
+        """Sekundy do dalšího dotazu podle rovnoměrného rozložení mezi tokeny (32 s / počet)."""
         self.ensure_one()
         last = self.sudo().fio_last_request_at
         if not last:
@@ -106,16 +111,21 @@ class ResPartnerBank(models.Model):
         return int(remaining) + 1 if remaining > 0 else 0
 
     def _fio_seconds_until_allowed(self):
-        """Za kolik sekund jde na účet poslat další dotaz: rozestup mezi dotazy i limit 30 s
+        """Za kolik sekund jde na účet poslat další dotaz: rozestup mezi dotazy i limit
         nejdřív volného tokenu. Bez tokenu vrací plný limit."""
         self.ensure_one()
         tokens = self._fio_tokens()
         if not tokens:
-            return fio_api.RATE_LIMIT_SECONDS
+            return fio_api.TOKEN_GAP_SECONDS
         return max(self._fio_spacing_wait(), min(t._seconds_until_allowed() for t in tokens))
 
     def _fio_pick_token(self):
-        """Token pro další dotaz: ten, který se nejdéle nepoužil, pokud už smí a rozestup to dovolí."""
+        """Token pro další dotaz: ten, který se nejdéle nepoužil, pokud už smí a rozestup to dovolí.
+
+        Tím se postupně vystřídají všechny aktivní tokeny (a, b, c, a, b, c …) bez ohledu na to,
+        jak často se dotazy dějí (pokladna po sekundách, cron po hodině), a i když některý token
+        vrací chybu – i ten se na řadu dostane a jeho chyba je vidět v seznamu tokenů.
+        """
         self.ensure_one()
         tokens = self._fio_tokens()
         if not tokens or self._fio_spacing_wait() > 0:
@@ -180,7 +190,7 @@ class ResPartnerBank(models.Model):
             bank.fio_last_error = f"{label}: {exc}"
             _logger.error("Fio %s (%s): %s", self.display_name, label, exc)
             return None
-        token.last_error = False
+        token.write({"last_error": False, "last_success_at": now})
         bank.fio_last_error = False
         return True if result is None else result
 

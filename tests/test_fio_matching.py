@@ -295,7 +295,7 @@ class TestFioMatching(CommonPosTest):
             self.assertFalse(res3["confirmed"], "rezervovaný pohyb nedostane jiná objednávka")
             self.assertGreater(res3["next_check_in"], 0)
             self.assertFalse(res3["synced"], "do 30 s se Fio nevolá, pokladna jen odpočítává")
-            self.assertEqual(res3["interval"], 30, "jeden token = dotaz každých 30 s")
+            self.assertEqual(res3["interval"], 32, "jeden token = dotaz každých 32 s (30 s limit + rezerva)")
             self.assertEqual(res3["token_count"], 1)
         self._rest()
         with patch.object(fio_api, "fetch_last", return_value=[]):
@@ -372,6 +372,8 @@ class TestFioMatching(CommonPosTest):
             self.assertFalse(bank.fio_sync_recent())
             fetch_last.assert_not_called()
         bank.fio_last_request_at = fields.Datetime.now() - timedelta(seconds=31)
+        self.assertGreater(bank._fio_seconds_until_allowed(), 0, "rezerva 2 s: po 31 s ještě ne")
+        bank.fio_last_request_at = fields.Datetime.now() - timedelta(seconds=33)
         self.assertEqual(bank._fio_seconds_until_allowed(), 0)
         with patch.object(fio_api, "fetch_last", side_effect=fio_api.FioRateLimitError("HTTP 409")):
             self.assertFalse(bank.fio_sync_recent())
@@ -521,20 +523,20 @@ class TestFioMatching(CommonPosTest):
         Bank = self.env["res.partner.bank"]
         self.assertEqual(
             [Bank._fio_interval_for(n) for n in (0, 1, 2, 3, 4, 7, 15, 40)],
-            [30, 30, 15, 10, 8, 5, 2, 2],
-            "30 s / počet tokenů zaokrouhleno nahoru, nejméně 2 s",
+            [32, 32, 16, 11, 8, 5, 3, 2],
+            "(30 s + 2 s rezerva) / počet tokenů zaokrouhleno nahoru, nejméně 2 s",
         )
         bank = self.bank_account
-        self.assertEqual((bank.fio_token_count, bank.fio_interval), (1, 30))
+        self.assertEqual((bank.fio_token_count, bank.fio_interval), (1, 32))
         b, c = self._add_tokens("B", "C")
-        self.assertEqual((bank.fio_token_count, bank.fio_interval), (3, 10))
+        self.assertEqual((bank.fio_token_count, bank.fio_interval), (3, 11))
         c.active = False
-        self.assertEqual((bank.fio_token_count, bank.fio_interval), (2, 15), "neaktivní token se nepočítá")
+        self.assertEqual((bank.fio_token_count, bank.fio_interval), (2, 16), "neaktivní token se nepočítá")
         with patch.object(fio_api, "fetch_last", return_value=[]):
             res = self.qr_payment_method.fio_check_qr_payment(1.0, "Order 1-1-000001", self.currency_id)
-        self.assertEqual(res["interval"], 15)
+        self.assertEqual(res["interval"], 16)
         self.assertEqual(res["token_count"], 2)
-        self.assertEqual(self.env["pos.payment"].fio_pending_overview(self.pos_config_usd.id)["interval"], 15)
+        self.assertEqual(self.env["pos.payment"].fio_pending_overview(self.pos_config_usd.id)["interval"], 16)
 
     def test_tokens_take_turns(self):
         """Tokeny se volají postupně za sebou, vždy ten nejdéle nepoužitý; každý nejvýš jednou za 30 s."""
@@ -549,8 +551,8 @@ class TestFioMatching(CommonPosTest):
 
         with patch.object(fio_api, "fetch_last", side_effect=fetch_last):
             self.assertTrue(bank.fio_sync_recent())
-            self.assertFalse(bank.fio_sync_recent(), "hned za ním ne: rozestup 10 s mezi dotazy")
-            self.assertGreaterEqual(bank._fio_seconds_until_allowed(), 10)
+            self.assertFalse(bank.fio_sync_recent(), "hned za ním ne: rozestup 11 s mezi dotazy")
+            self.assertGreaterEqual(bank._fio_seconds_until_allowed(), 11)
             for step in range(1, 6):
                 # posun času o 11 s: rozestup splněný, tokeny se střídají a každý čeká svých 30 s
                 bank.fio_last_request_at = now - timedelta(seconds=11)
@@ -559,13 +561,42 @@ class TestFioMatching(CommonPosTest):
                         token.last_request_at -= timedelta(seconds=11)
                 self.assertTrue(bank.fio_sync_recent(), f"krok {step}")
         self.assertEqual("".join(used), "abcabc", "střídání a → b → c → a …")
-        # všechny tokeny použité před méně než 30 s: další dotaz nejde, ani když uplyne rozestup
+        # všechny tokeny použité před méně než 32 s: další dotaz nejde, ani když uplyne rozestup
         bank.fio_last_request_at = now - timedelta(seconds=11)
         bank.fio_token_ids.write({"last_request_at": now - timedelta(seconds=20)})
         self.assertGreater(bank._fio_seconds_until_allowed(), 0)
         with patch.object(fio_api, "fetch_last") as fetch_last:
             self.assertFalse(bank.fio_sync_recent())
             fetch_last.assert_not_called()
+
+    def test_all_tokens_cycle_with_sparse_calls_and_a_failing_token(self):
+        """Řídké dotazy (cron po hodině) i nefunkční token: na řadu přijdou postupně všechny tokeny."""
+        bank = self.bank_account
+        b, c, d = self._add_tokens("B", "C", "D")
+        used = []
+
+        def fetch_last(token):
+            used.append(token[0])
+            if token[0] == "c":
+                raise fio_api.FioApiError("Fio API: HTTP 500 – neexistující nebo neaktivní token")
+            return []
+
+        with patch.object(fio_api, "fetch_last", side_effect=fetch_last):
+            for _hour in range(8):
+                bank._fio_sync_recent()
+                # o hodinu později: posunout všechny časy dozadu
+                if bank.fio_last_request_at:
+                    bank.fio_last_request_at -= timedelta(hours=1)
+                for token in bank.fio_token_ids:
+                    if token.last_request_at:
+                        token.last_request_at -= timedelta(hours=1)
+        self.assertEqual("".join(used), "abcdabcd", "každý aktivní token se použije, i ten poslední a i ten s chybou")
+        tokens = bank.fio_token_ids
+        self.assertTrue(all(tokens.mapped("last_request_at")))
+        self.assertFalse(c.last_success_at, "nefunkční token nemá úspěšný dotaz")
+        self.assertIn("500", c.last_error)
+        self.assertTrue(all((tokens - c).mapped("last_success_at")))
+        self.assertFalse((tokens - c).filtered("last_error"))
 
     def test_new_token_sets_its_own_bookmark(self):
         bank = self.bank_account
@@ -688,7 +719,7 @@ class TestFioMatching(CommonPosTest):
         self.assertGreater(again["wait"], 0, "do 30 s od posledního dotazu se hlásí čekání")
         self.assertEqual(again["next_check_in"], again["wait"], "odpočet v popupu = čekání na Fio")
         self.assertTrue(again["bank_enabled"])
-        self.assertEqual(again["interval"], 30)
+        self.assertEqual(again["interval"], 32)
         self.assertFalse(Payment.fio_pending_overview(self.pos_config_eur.id)["bank_enabled"])
 
         self._rest()

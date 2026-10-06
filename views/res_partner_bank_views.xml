@@ -15,7 +15,8 @@
                             <field name="name" placeholder="např. vydán 6. 10. 2026"/>
                             <field name="token" password="True"/>
                             <field name="active" widget="boolean_toggle"/>
-                            <field name="last_request_at"/>
+                            <field name="last_request_at" optional="show"/>
+                            <field name="last_success_at"/>
                             <field name="bookmark_set" optional="show"/>
                             <field name="last_error" optional="show"/>
                         </list>
@@ -49,9 +50,11 @@
                     <p class="text-muted mt-3">
                         Token se vydává v internetovém bankovnictví Fio (Nastavení › API) k jednomu účtu, stačí práva
                         „sledování účtu“; funguje 5 minut po autorizaci, platí nejdéle 180 dní. Fio dovolí jeden dotaz
-                        za 30 sekund na token, proto víc tokenů zkrátí interval: modul je volá postupně za sebou,
-                        vždy ten, který se nejdéle nepoužil (2 tokeny = 15 s, 3 tokeny = 10 s…). Každý token si při
-                        prvním použití nastaví zarážku „od posledního stažení“. Pohyby starší 90 dní Fio vydá jen po
+                        za 30 sekund na token, proto víc tokenů zkrátí interval: modul volá všechny aktivní tokeny
+                        postupně za sebou, vždy ten, který se nejdéle nepoužil, s rezervou 2 s (1 token = 32 s,
+                        2 tokeny = 16 s, 3 tokeny = 11 s…). Neaktivní token se nevolá. Každý token si při prvním
+                        použití nastaví zarážku „od posledního stažení“. Platnost tokenu (nejdéle 180 dní) se podle Fio
+                        s automatickým prodlužováním obnovuje přihlášením do Internetbankingu nebo Smartbankingu. Pohyby starší 90 dní Fio vydá jen po
                         autorizaci ikonou zámku u tokenu (platí 10 minut) – chyba „HTTP 422“ znamená právě tohle.
                         Lokální testovací Odoo a produkce nesmí sdílet stejné tokeny.
                     </p>

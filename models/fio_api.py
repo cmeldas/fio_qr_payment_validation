@@ -16,6 +16,10 @@ _logger = logging.getLogger(__name__)
 
 FIO_BASE_URL = "https://fioapi.fio.cz/v1/rest"
 RATE_LIMIT_SECONDS = 30
+# Rozestup, který modul mezi dvěma dotazy jedním tokenem opravdu dodrží: limit Fio + rezerva.
+# Odoo ukládá čas jen na celé sekundy (výpočet může vyjít až o 1 s kratší) a Fio lokálně
+# odmítlo dotaz (HTTP 409) i po 32 s.
+TOKEN_GAP_SECONDS = RATE_LIMIT_SECONDS + 2
 REQUEST_TIMEOUT = 40
 
 # Sloupce výpisu podle dokumentace Fio (column<N> -> náš klíč)

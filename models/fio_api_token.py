@@ -28,6 +28,11 @@ class FioApiToken(models.Model):
     )
     token_hint = fields.Char(string="Konec tokenu", compute="_compute_token_hint", compute_sudo=True)
     last_request_at = fields.Datetime(string="Poslední dotaz", readonly=True, copy=False)
+    last_success_at = fields.Datetime(
+        string="Poslední úspěšný dotaz", readonly=True, copy=False,
+        help="Kdy token naposledy fungoval. Tokeny se volají postupně za sebou, takže u každého aktivního "
+        "tokenu by měl být čerstvý; starý údaj s chybou znamená neplatný nebo vypršelý token.",
+    )
     bookmark_set = fields.Boolean(
         string="Zarážka nastavena", readonly=True, copy=False,
         help="Fio si u každého tokenu pamatuje, odkud posílat nové pohyby. Nový token si ji při prvním "
@@ -67,11 +72,11 @@ class FioApiToken(models.Model):
         return super().write(self._clean_vals(dict(vals)))
 
     def _seconds_until_allowed(self):
-        """Za kolik sekund Fio dovolí tímto tokenem další dotaz (0 = hned)."""
+        """Za kolik sekund jde tímto tokenem další dotaz (0 = hned); limit Fio 30 s + rezerva 2 s."""
         self.ensure_one()
         if not self.last_request_at:
             return 0
-        remaining = fio_api.RATE_LIMIT_SECONDS - (fields.Datetime.now() - self.last_request_at).total_seconds()
+        remaining = fio_api.TOKEN_GAP_SECONDS - (fields.Datetime.now() - self.last_request_at).total_seconds()
         return int(remaining) + 1 if remaining > 0 else 0
 
     def _display(self):
