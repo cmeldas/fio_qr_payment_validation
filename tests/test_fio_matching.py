@@ -5,7 +5,9 @@ from datetime import date, timedelta
 from unittest.mock import patch
 
 from odoo import Command, fields
-from odoo.exceptions import UserError
+from odoo.exceptions import UserError, ValidationError
+from odoo.tools import mute_logger
+from psycopg2 import IntegrityError
 from odoo.tests import tagged
 from odoo.addons.point_of_sale.tests.common import CommonPosTest
 
@@ -63,8 +65,8 @@ class TestFioMatching(CommonPosTest):
         cls.bank_account = cls.env["res.partner.bank"].create({
             "acc_number": "CZ3820100000002401835999",
             "partner_id": cls.env.company.partner_id.id,
-            "fio_api_token": "t" * 64,
-            "fio_bookmark_set": True,  # jako po prvním kontaktu s Fio; samotné nastavení testuje test_first_sync_sets_bookmark
+            # jako po prvním kontaktu s Fio (zarážka nastavená); samotné nastavení testuje test_first_sync_sets_bookmark
+            "fio_token_ids": [Command.create({"name": "A", "token": "a" * 64, "bookmark_set": True})],
         })
         cls.bank_journal = cls.env["account.journal"].create({
             "name": "Fio", "type": "bank", "code": "FIO",
@@ -84,6 +86,20 @@ class TestFioMatching(CommonPosTest):
             "name": "Káva", "type": "consu", "list_price": 77.0, "available_in_pos": True, "taxes_id": [Command.clear()],
         })
         cls.currency_id = cls.env.company.currency_id.id
+
+    def _rest(self, bank=None):
+        """Jako by od posledních dotazů uplynulo dost času: účet i všechny jeho tokeny volné."""
+        bank = bank or self.bank_account
+        bank.fio_last_request_at = False
+        bank.with_context(active_test=False).fio_token_ids.write({"last_request_at": False})
+
+    def _add_tokens(self, *names):
+        """Další tokeny k účtu (se zarážkou), vrací nové záznamy."""
+        return self.env["fio.api.token"].create([
+            {"bank_account_id": self.bank_account.id, "name": name, "token": name.lower() * 64, "bookmark_set": True,
+             "sequence": 20 + index}
+            for index, name in enumerate(names)
+        ])
 
     def _store(self, transactions):
         items = fio_api.parse_transactions(fio_payload(transactions))
@@ -279,8 +295,9 @@ class TestFioMatching(CommonPosTest):
             self.assertFalse(res3["confirmed"], "rezervovaný pohyb nedostane jiná objednávka")
             self.assertGreater(res3["next_check_in"], 0)
             self.assertFalse(res3["synced"], "do 30 s se Fio nevolá, pokladna jen odpočítává")
-            self.assertEqual(res3["rate_limit"], 30)
-        self.bank_account.fio_last_request_at = False
+            self.assertEqual(res3["interval"], 30, "jeden token = dotaz každých 30 s")
+            self.assertEqual(res3["token_count"], 1)
+        self._rest()
         with patch.object(fio_api, "fetch_last", return_value=[]):
             res4 = method.fio_check_qr_payment(77.0, "Order 300-1-000002", self.currency_id)
         self.assertTrue(res4["synced"], "po uplynutí limitu se stáhne z banky a ukazatel začne od plna")
@@ -306,14 +323,14 @@ class TestFioMatching(CommonPosTest):
         self.assertEqual(res["match_type"], "amount")
         self.assertAlmostEqual(res["tip"], 13.0)
 
-        self.bank_account.fio_last_request_at = False
+        self._rest()
         items = fio_api.parse_transactions(fio_payload([fio_transaction(212, date.today(), 200.0, "bez cisla")]))
         with patch.object(fio_api, "fetch_last", return_value=items):
             res = method.fio_check_qr_payment(77.0, "Order 300-1-000012", self.currency_id)
         self.assertFalse(res["confirmed"], "pohyb o víc než 50 % vyšší bez čísla objednávky se nebere")
 
         # s číslem objednávky projde libovolně vyšší pohyb, nižší nikdy
-        self.bank_account.fio_last_request_at = False
+        self._rest()
         items = fio_api.parse_transactions(fio_payload([
             fio_transaction(213, date.today(), 70.0, "Order 300-1-000013 1"),
             fio_transaction(214, date.today(), 200.0, "Order 300-1-000013 1"),
@@ -326,7 +343,8 @@ class TestFioMatching(CommonPosTest):
         self.assertAlmostEqual(res["tip"], 123.0)
 
     def test_pos_check_disabled_without_token(self):
-        self.bank_account.fio_api_token = False
+        self.bank_account.fio_token_ids.active = False
+        self.assertFalse(self.bank_account.fio_enabled, "bez aktivního tokenu je párování vypnuté")
         self.assertEqual(
             self.qr_payment_method.fio_check_qr_payment(1.0, "Order 1-1-000001", self.currency_id),
             {"enabled": False},
@@ -334,14 +352,14 @@ class TestFioMatching(CommonPosTest):
 
     def test_first_sync_sets_bookmark(self):
         bank = self.bank_account
-        bank.fio_bookmark_set = False
+        bank.fio_token_ids.bookmark_set = False
         with patch.object(fio_api, "set_last_date") as set_last_date, patch.object(fio_api, "fetch_last") as fetch_last:
             self.assertFalse(bank.fio_sync_recent(), "první volání jen nastaví zarážku")
             set_last_date.assert_called_once()
             self.assertEqual(set_last_date.call_args.args[1], date.today() - timedelta(days=85))
             fetch_last.assert_not_called()
-        self.assertTrue(bank.fio_bookmark_set)
-        bank.fio_last_request_at = False
+        self.assertTrue(bank.fio_token_ids.bookmark_set)
+        self._rest(bank)
         with patch.object(fio_api, "fetch_last", return_value=[]) as fetch_last:
             self.assertTrue(bank.fio_sync_recent())
             fetch_last.assert_called_once()
@@ -358,7 +376,8 @@ class TestFioMatching(CommonPosTest):
         with patch.object(fio_api, "fetch_last", side_effect=fio_api.FioRateLimitError("HTTP 409")):
             self.assertFalse(bank.fio_sync_recent())
         self.assertIn("409", bank.fio_last_error)
-        bank.fio_last_request_at = False
+        self.assertIn("409", bank.fio_token_ids.last_error, "chyba se uloží i k tokenu")
+        self._rest(bank)
         with patch.object(fio_api, "fetch_last", return_value=[]):
             self.assertTrue(bank.fio_sync_recent())
         self.assertFalse(bank.fio_last_error)
@@ -446,7 +465,8 @@ class TestFioMatching(CommonPosTest):
     def test_history_import_steps(self):
         bank = self.bank_account
         Bank = self.env["res.partner.bank"]
-        calls, set_last = [], []
+        calls = []
+        second = self._add_tokens("B")
 
         def fetch_periods(token, day_from, day_to):
             calls.append((day_from, day_to))
@@ -454,25 +474,26 @@ class TestFioMatching(CommonPosTest):
                 fio_transaction(500 + len(calls), day_from, 1.0, f"historie {len(calls)}"),
             ]))
 
-        bank.write({"fio_history_from": date.today() - timedelta(days=800), "fio_bookmark_set": False})
-        with patch.object(fio_api, "fetch_periods", side_effect=fetch_periods), \
-             patch.object(fio_api, "set_last_id", side_effect=lambda token, fio_id: set_last.append(fio_id)):
+        bank.write({"fio_history_from": date.today() - timedelta(days=800)})
+        used_tokens = []
+
+        def fetch_periods_tracked(token, day_from, day_to):
+            used_tokens.append(token)
+            return fetch_periods(token, day_from, day_to)
+
+        with patch.object(fio_api, "fetch_periods", side_effect=fetch_periods_tracked):
             bank.action_fio_import_history()
             self.assertTrue(bank.fio_history_running)
             for _step in range(3):
-                bank.fio_last_request_at = False  # jako by uplynulo 30 s
+                self._rest(bank)  # jako by uplynulo 30 s
                 Bank._cron_fio_history_step()
             self.assertFalse(bank.fio_history_running)
             self.assertEqual(len(calls), 3, "800 dní = tři roční bloky")
             self.assertEqual(calls[0][0], date.today() - timedelta(days=800))
             self.assertEqual(calls[1][0], calls[0][1] + timedelta(days=1))
             self.assertEqual(calls[-1][1], date.today())
-            self.assertEqual(bank.fio_history_set_last_id, "503")
-            bank.fio_last_request_at = False
-            Bank._cron_fio_history_step()
-            self.assertEqual(set_last, ["503"])
-            self.assertFalse(bank.fio_history_set_last_id)
-            self.assertTrue(bank.fio_bookmark_set, "po importu historie je zarážka `last` nastavená")
+        self.assertEqual(set(used_tokens), {"a" * 64}, "historie jde jen prvním tokenem (odemčení zámkem platí pro jeden)")
+        self.assertFalse(second.last_request_at)
         stored = self.env["fio.bank.transaction"].search([
             ("bank_account_id", "=", bank.id), ("fio_id", "in", ["501", "502", "503"]),
         ])
@@ -480,17 +501,108 @@ class TestFioMatching(CommonPosTest):
 
     def test_history_import_stops_on_api_error(self):
         bank = self.bank_account
-        bank.write({"fio_history_from": date.today() - timedelta(days=10), "fio_last_request_at": False})
+        bank.write({"fio_history_from": date.today() - timedelta(days=10)})
+        self._rest(bank)
         with patch.object(fio_api, "fetch_periods", side_effect=fio_api.FioApiError("Fio API: HTTP 422 – odmítnuto")):
             bank.action_fio_import_history()
             self.env["res.partner.bank"]._cron_fio_history_step()
         self.assertFalse(bank.fio_history_running, "po chybě jiné než limit se import nezacyklí")
         self.assertIn("422", bank.fio_last_error)
-        bank.fio_last_request_at = False
+        self._rest(bank)
         with patch.object(fio_api, "fetch_periods", side_effect=fio_api.FioRateLimitError("HTTP 409")):
             bank.action_fio_import_history()
             self.env["res.partner.bank"]._cron_fio_history_step()
         self.assertTrue(bank.fio_history_running, "po limitu 409 import pokračuje dalším krokem")
+
+    # ------------------------------------------------------------------
+    # Víc tokenů: střídání, interval, zarážky
+    # ------------------------------------------------------------------
+    def test_interval_by_token_count(self):
+        Bank = self.env["res.partner.bank"]
+        self.assertEqual(
+            [Bank._fio_interval_for(n) for n in (0, 1, 2, 3, 4, 7, 15, 40)],
+            [30, 30, 15, 10, 8, 5, 2, 2],
+            "30 s / počet tokenů zaokrouhleno nahoru, nejméně 2 s",
+        )
+        bank = self.bank_account
+        self.assertEqual((bank.fio_token_count, bank.fio_interval), (1, 30))
+        b, c = self._add_tokens("B", "C")
+        self.assertEqual((bank.fio_token_count, bank.fio_interval), (3, 10))
+        c.active = False
+        self.assertEqual((bank.fio_token_count, bank.fio_interval), (2, 15), "neaktivní token se nepočítá")
+        with patch.object(fio_api, "fetch_last", return_value=[]):
+            res = self.qr_payment_method.fio_check_qr_payment(1.0, "Order 1-1-000001", self.currency_id)
+        self.assertEqual(res["interval"], 15)
+        self.assertEqual(res["token_count"], 2)
+        self.assertEqual(self.env["pos.payment"].fio_pending_overview(self.pos_config_usd.id)["interval"], 15)
+
+    def test_tokens_take_turns(self):
+        """Tokeny se volají postupně za sebou, vždy ten nejdéle nepoužitý; každý nejvýš jednou za 30 s."""
+        bank = self.bank_account
+        self._add_tokens("B", "C")
+        used = []
+        now = fields.Datetime.now()
+
+        def fetch_last(token):
+            used.append(token[0])
+            return []
+
+        with patch.object(fio_api, "fetch_last", side_effect=fetch_last):
+            self.assertTrue(bank.fio_sync_recent())
+            self.assertFalse(bank.fio_sync_recent(), "hned za ním ne: rozestup 10 s mezi dotazy")
+            self.assertGreaterEqual(bank._fio_seconds_until_allowed(), 10)
+            for step in range(1, 6):
+                # posun času o 11 s: rozestup splněný, tokeny se střídají a každý čeká svých 30 s
+                bank.fio_last_request_at = now - timedelta(seconds=11)
+                for token in bank.fio_token_ids:
+                    if token.last_request_at:
+                        token.last_request_at -= timedelta(seconds=11)
+                self.assertTrue(bank.fio_sync_recent(), f"krok {step}")
+        self.assertEqual("".join(used), "abcabc", "střídání a → b → c → a …")
+        # všechny tokeny použité před méně než 30 s: další dotaz nejde, ani když uplyne rozestup
+        bank.fio_last_request_at = now - timedelta(seconds=11)
+        bank.fio_token_ids.write({"last_request_at": now - timedelta(seconds=20)})
+        self.assertGreater(bank._fio_seconds_until_allowed(), 0)
+        with patch.object(fio_api, "fetch_last") as fetch_last:
+            self.assertFalse(bank.fio_sync_recent())
+            fetch_last.assert_not_called()
+
+    def test_new_token_sets_its_own_bookmark(self):
+        bank = self.bank_account
+        bank.fio_token_ids.last_request_at = fields.Datetime.now()  # token A teď nesmí
+        bank.fio_last_request_at = fields.Datetime.now() - timedelta(seconds=40)
+        new = self.env["fio.api.token"].create({"bank_account_id": bank.id, "name": "Nový", "token": " n" * 32})
+        self.assertEqual(new.token, "n" * 32, "mezery z vloženého tokenu se odstraní")
+        self.assertFalse(new.bookmark_set)
+        with patch.object(fio_api, "set_last_date") as set_last_date, patch.object(fio_api, "fetch_last") as fetch_last:
+            self.assertEqual(bank._fio_sync_recent(), "bookmark")
+            set_last_date.assert_called_once()
+            self.assertEqual(set_last_date.call_args.args[0], "n" * 32, "zarážku si nastaví právě nový token")
+            fetch_last.assert_not_called()
+        self.assertTrue(new.bookmark_set)
+        new.token = "m" * 64
+        self.assertFalse(new.bookmark_set, "jiná hodnota tokenu = nová zarážka")
+
+    def test_stale_bookmark_422_resets_token(self):
+        bank = self.bank_account
+        token = bank.fio_token_ids
+        with patch.object(fio_api, "fetch_last", side_effect=fio_api.FioHistoryLockedError("Fio API: HTTP 422 – data starší 90 dní")):
+            self.assertEqual(bank._fio_sync_recent(), "error")
+        self.assertFalse(token.bookmark_set, "zarážka starší 90 dní: příště se nastaví znovu")
+        self.assertIn("422", token.last_error)
+        self._rest(bank)
+        with patch.object(fio_api, "set_last_date") as set_last_date:
+            self.assertEqual(bank._fio_sync_recent(), "bookmark")
+            set_last_date.assert_called_once()
+        self.assertTrue(token.bookmark_set)
+        self.assertFalse(token.last_error)
+
+    def test_duplicate_or_short_token_refused(self):
+        with self.assertRaises(ValidationError):
+            self.env["fio.api.token"].create({"bank_account_id": self.bank_account.id, "token": "kratky"})
+        with self.assertRaises(IntegrityError), mute_logger("odoo.sql_db"):
+            with self.env.cr.savepoint():
+                self.env["fio.api.token"].create({"bank_account_id": self.bank_account.id, "token": "a" * 64})
 
     def test_cron_syncs_and_matches(self):
         order = self._order(self.product_80, self.qr_payment_method, pos_reference="Order 261-1-000077")
@@ -508,15 +620,18 @@ class TestFioMatching(CommonPosTest):
         bank = self.bank_account
         Bank = self.env["res.partner.bank"]
         self.env["pos.config"].search([]).write({"fio_pos_last_seen": False})
-        bank.write({"fio_last_sync_at": fields.Datetime.now() - timedelta(minutes=10), "fio_last_request_at": False})
+        bank.write({"fio_last_sync_at": fields.Datetime.now() - timedelta(minutes=10)})
+        self._rest(bank)
         with patch.object(fio_api, "fetch_last", return_value=[]) as fetch_last:
             Bank._cron_fio_sync()
             fetch_last.assert_not_called()  # žádná pokladna neběží a poslední stažení je čerstvé
-        bank.write({"fio_last_sync_at": fields.Datetime.now() - timedelta(minutes=61), "fio_last_request_at": False})
+        bank.write({"fio_last_sync_at": fields.Datetime.now() - timedelta(minutes=61)})
+        self._rest(bank)
         with patch.object(fio_api, "fetch_last", return_value=[]) as fetch_last:
             Bank._cron_fio_sync()
             fetch_last.assert_called_once()  # po hodině se stáhne i bez pokladny
-        bank.write({"fio_last_sync_at": fields.Datetime.now(), "fio_last_request_at": False})
+        bank.write({"fio_last_sync_at": fields.Datetime.now()})
+        self._rest(bank)
         self.env["pos.payment"].fio_pending_overview(self.pos_config_usd.id)  # lišta pokladny se ohlásila
         self.assertTrue(self.pos_config_usd.fio_pos_last_seen)
         self.assertTrue(self.env["pos.config"]._fio_pos_active())
@@ -557,7 +672,7 @@ class TestFioMatching(CommonPosTest):
         items = fio_api.parse_transactions(fio_payload([
             fio_transaction(801, date.today(), order.amount_total, "Order 261-1-000066 1"),
         ]))
-        self.bank_account.fio_last_request_at = False
+        self._rest()
         with patch.object(fio_api, "fetch_last", return_value=items) as fetch_last:
             result = Payment.fio_refresh_from_bank(config.id)
             fetch_last.assert_called_once()
@@ -573,10 +688,10 @@ class TestFioMatching(CommonPosTest):
         self.assertGreater(again["wait"], 0, "do 30 s od posledního dotazu se hlásí čekání")
         self.assertEqual(again["next_check_in"], again["wait"], "odpočet v popupu = čekání na Fio")
         self.assertTrue(again["bank_enabled"])
-        self.assertEqual(again["rate_limit"], 30)
+        self.assertEqual(again["interval"], 30)
         self.assertFalse(Payment.fio_pending_overview(self.pos_config_eur.id)["bank_enabled"])
 
-        self.bank_account.fio_last_request_at = False
+        self._rest()
         with patch.object(fio_api, "fetch_last", side_effect=fio_api.FioApiError("Fio API: HTTP 500 – token")):
             failed = Payment.fio_refresh_from_bank(config.id)
         self.assertFalse(failed["synced"])

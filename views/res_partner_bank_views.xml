@@ -7,14 +7,26 @@
         <field name="arch" type="xml">
             <xpath expr="//notebook" position="inside">
                 <page string="Fio" name="fio" groups="base.group_system">
+                    <field name="fio_enabled" invisible="1"/>
+                    <label for="fio_token_ids" string="API tokeny" class="fw-bold"/>
+                    <field name="fio_token_ids" nolabel="1" context="{'active_test': False}">
+                        <list editable="bottom" decoration-muted="not active" decoration-danger="last_error">
+                            <field name="sequence" widget="handle"/>
+                            <field name="name" placeholder="např. vydán 6. 10. 2026"/>
+                            <field name="token" password="True"/>
+                            <field name="active" widget="boolean_toggle"/>
+                            <field name="last_request_at"/>
+                            <field name="bookmark_set" optional="show"/>
+                            <field name="last_error" optional="show"/>
+                        </list>
+                    </field>
                     <group>
-                        <group string="Napojení na Fio">
-                            <field name="fio_api_token" password="True"/>
-                            <field name="fio_enabled"/>
+                        <group string="Stahování">
+                            <field name="fio_token_count"/>
+                            <field name="fio_interval"/>
                             <field name="fio_last_sync_at"/>
                             <field name="fio_last_request_at"/>
                             <field name="fio_last_error" invisible="not fio_last_error" class="text-danger"/>
-                            <field name="fio_bookmark_set"/>
                             <field name="fio_transaction_count"/>
                         </group>
                         <group string="Historie pohybů">
@@ -29,7 +41,7 @@
                         <button name="action_fio_match_pending" type="object" string="Spárovat čekající" class="btn btn-secondary"/>
                         <button name="action_fio_import_history" type="object" string="Načíst historii" class="btn btn-secondary"
                                 invisible="not fio_enabled or fio_history_running"
-                                confirm="Data starší 90 dní Fio pustí jen po autorizaci v internetbankingu (Nastavení › API › ikona zámku u tokenu), a to na 10 minut – udělej ji těsně před spuštěním. Historie se stáhne po ročních blocích s pauzou 35 s (limit Fio: jeden dotaz za 30 s). Pokračovat?"/>
+                                confirm="Historie se stahuje prvním tokenem v seznamu. Data starší 90 dní Fio pustí jen po autorizaci v internetbankingu (Nastavení › API › ikona zámku u tohoto tokenu), a to na 10 minut – udělej ji těsně před spuštěním. Historie se stáhne po ročních blocích s pauzou 35 s. Pokračovat?"/>
                         <button name="action_fio_stop_history" type="object" string="Zastavit import" class="btn btn-warning"
                                 invisible="not fio_history_running"/>
                         <button name="action_fio_open_transactions" type="object" string="Zobrazit pohyby" class="btn btn-link"/>
@@ -37,8 +49,11 @@
                     <p class="text-muted mt-3">
                         Token se vydává v internetovém bankovnictví Fio (Nastavení › API) k jednomu účtu, stačí práva
                         „sledování účtu“; funguje 5 minut po autorizaci, platí nejdéle 180 dní. Fio dovolí jeden dotaz
-                        za 30 sekund, modul limit hlídá sám. Pohyby starší 90 dní Fio vydá jen po autorizaci ikonou
-                        zámku u tokenu (platí 10 minut) – chyba „HTTP 422“ znamená právě tohle.
+                        za 30 sekund na token, proto víc tokenů zkrátí interval: modul je volá postupně za sebou,
+                        vždy ten, který se nejdéle nepoužil (2 tokeny = 15 s, 3 tokeny = 10 s…). Každý token si při
+                        prvním použití nastaví zarážku „od posledního stažení“. Pohyby starší 90 dní Fio vydá jen po
+                        autorizaci ikonou zámku u tokenu (platí 10 minut) – chyba „HTTP 422“ znamená právě tohle.
+                        Lokální testovací Odoo a produkce nesmí sdílet stejné tokeny.
                     </p>
                 </page>
             </xpath>

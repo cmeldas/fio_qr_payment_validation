@@ -21,8 +21,9 @@ const TICK_MS = 250;
  * „Automaticky potvrzeno“ a pošle stav na zákaznický displej; potvrzení zůstává, dokud
  * obsluha neklikne na „Potvrdit platbu“ (zákazník tak vidí „Platba přijata“ stejně dlouho).
  *
- * Během čekání běží ukazatel: plný hned po stažení z banky, prázdný ve chvíli, kdy Fio
- * dovolí další dotaz (30 s) – přesně tehdy se pokladna serveru zeptá znovu.
+ * Během čekání běží ukazatel: plný hned po stažení z banky, prázdný ve chvíli dalšího
+ * dotazu – přesně tehdy se pokladna serveru zeptá znovu. Délku dává server: 30 s děleno
+ * počtem Fio tokenů účtu (tokeny se střídají), např. 10 s při třech tokenech.
  */
 patch(QRPopup.prototype, {
     setup() {
@@ -34,7 +35,7 @@ patch(QRPopup.prototype, {
             status: "idle",
             detail: "",
             nextAt: 0, // kdy Fio zase dovolí dotaz (ms)
-            rateLimit: 30, // s
+            interval: 30, // s mezi dotazy na banku (30 s / počet tokenů)
             now: Date.now(),
         });
         this.fioTimer = null;
@@ -80,13 +81,18 @@ patch(QRPopup.prototype, {
 
     /** Šířka ukazatele: 100 % hned po stažení z banky, 0 % když je další dotaz na řadě. */
     get fioProgressPercent() {
-        const total = (this.fio.rateLimit || 30) * 1000;
+        const total = (this.fio.interval || 30) * 1000;
         return Math.min(100, Math.round((this.fioRemainingMs / total) * 100));
     },
 
     get fioCountdownLabel() {
         const seconds = Math.ceil(this.fioRemainingMs / 1000);
         return seconds > 0 ? _t("Další kontrola banky za %s s", seconds) : _t("Kontroluji banku…");
+    },
+
+    /** Skutečný interval mezi dotazy na banku, např. „každých 10 s“. */
+    get fioIntervalLabel() {
+        return _t("každých %s s", this.fio.interval || 30);
     },
 
     async fioCheck() {
@@ -125,7 +131,7 @@ patch(QRPopup.prototype, {
         }
         this.fio.status = "checking";
         this.fio.detail = "";
-        this.fio.rateLimit = result.rate_limit || 30;
+        this.fio.interval = result.interval || 30;
         this.fio.nextAt = Date.now() + (result.next_check_in || 0) * 1000;
         this.fio.now = Date.now();
         // další dotaz nejpozději za 5 s, ale přesně ve chvíli, kdy Fio dovolí nové stažení

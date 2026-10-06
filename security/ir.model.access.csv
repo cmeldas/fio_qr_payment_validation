@@ -4,3 +4,4 @@ access_fio_bank_transaction_pos_manager,fio.bank.transaction pos manager,model_f
 access_fio_bank_transaction_account_manager,fio.bank.transaction account manager,model_fio_bank_transaction,account.group_account_manager,1,1,1,1
 access_fio_match_wizard_pos_manager,fio.match.wizard pos manager,model_fio_match_wizard,point_of_sale.group_pos_manager,1,1,1,1
 access_fio_match_wizard_account_manager,fio.match.wizard account manager,model_fio_match_wizard,account.group_account_manager,1,1,1,1
+access_fio_api_token_system,fio.api.token system,model_fio_api_token,base.group_system,1,1,1,1

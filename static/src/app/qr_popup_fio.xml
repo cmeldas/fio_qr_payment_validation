@@ -15,7 +15,10 @@
             <div t-elif="fio.status === 'checking'" class="fio_qr_checking w-100 mt-2" style="max-width: 320px;">
                 <div class="d-flex justify-content-between small text-muted">
                     <span><i class="fa fa-refresh fa-spin me-1" role="img" aria-label="Kontrola"/>Čekám na platbu v bance…</span>
-                    <span class="fio_qr_countdown ms-2 text-nowrap" t-esc="fioCountdownLabel"/>
+                    <span class="ms-2 text-nowrap">
+                        <span class="fio_qr_countdown" t-esc="fioCountdownLabel"/>
+                        <span class="fio_qr_interval ms-1 opacity-75">(<t t-esc="fioIntervalLabel"/>)</span>
+                    </span>
                 </div>
                 <div class="progress mt-1" style="height: 6px;">
                     <div class="progress-bar bg-info fio_qr_progress" role="progressbar" t-attf-style="width: {{ fioProgressPercent }}%; transition: width 0.25s linear;"/>

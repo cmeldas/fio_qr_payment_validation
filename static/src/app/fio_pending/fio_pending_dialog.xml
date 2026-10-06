@@ -8,6 +8,7 @@
                     <span class="fio-bank-countdown-label">
                         <i class="fa fa-refresh me-1" t-att-class="{ 'fa-spin': pending.loading }" role="img" aria-label="Banka"/>
                         <t t-esc="countdownLabel"/>
+                        <span class="fio-bank-interval ms-1 opacity-75">(<t t-esc="intervalLabel"/>)</span>
                     </span>
                     <span t-if="pending.message" class="fio-refresh-message" t-att-class="{ 'text-success': pending.messageType === 'success', 'text-danger': pending.messageType === 'danger', 'text-warning': pending.messageType === 'warning' }" t-esc="pending.message"/>
                 </div>

@@ -49,6 +49,13 @@ class FioRateLimitError(FioApiError):
     """Fio vrátilo 409: víc než jeden dotaz za 30 sekund."""
 
 
+class FioHistoryLockedError(FioApiError):
+    """Fio vrátilo 422: požadovaná data jsou starší 90 dní a přístup k historii není odemčený.
+
+    U `last` to znamená, že zarážka tokenu je starší než 90 dní (token se dlouho nepoužil).
+    """
+
+
 def _get(url):
     try:
         response = requests.get(url, timeout=REQUEST_TIMEOUT)
@@ -65,7 +72,8 @@ def _get(url):
                  "na ikonu zámku a autorizuj přístup k historii (platí 10 minut), pak akci zopakuj",
             500: "neexistující nebo neaktivní token (nový token funguje 5 minut po autorizaci, platnost nejdéle 180 dní)",
         }.get(response.status_code, "neočekávaná odpověď")
-        raise FioApiError(f"Fio API: HTTP {response.status_code} – {hint}" + (f" ({detail})" if detail else ""))
+        error_class = FioHistoryLockedError if response.status_code == 422 else FioApiError
+        raise error_class(f"Fio API: HTTP {response.status_code} – {hint}" + (f" ({detail})" if detail else ""))
     return response
 
 

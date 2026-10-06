@@ -11,7 +11,7 @@ const TICK_MS = 250;
  * Seznam QR plateb, které banka ještě nepotvrdila (stav „Čeká na banku“), pro obsluhu
  * pokladny: datum a čas, číslo objednávky, částka, proklik na objednávku v seznamu účtenek
  * a dýška za dnešek. Dokud je popup otevřený, stahuje pohyby z banky tak rychle, jak Fio dovolí
- * (jednou za 30 s) – ukazatel odpočítává do dalšího stažení. Data čte přímo z `pos.fioPending`,
+ * (30 s děleno počtem tokenů účtu) – ukazatel odpočítává do dalšího stažení. Data čte přímo z `pos.fioPending`,
  * takže se seznam po každém stažení sám překreslí.
  */
 export class FioPendingDialog extends Component {
@@ -45,7 +45,7 @@ export class FioPendingDialog extends Component {
 
     /** Šířka ukazatele: 100 % hned po stažení z banky, 0 % ve chvíli dalšího stažení. */
     get progressPercent() {
-        const total = (this.pending.rateLimit || 30) * 1000;
+        const total = (this.pending.interval || 30) * 1000;
         return Math.min(100, Math.round((this.remainingMs / total) * 100));
     }
 
@@ -55,6 +55,11 @@ export class FioPendingDialog extends Component {
             return _t("Načítám z banky…");
         }
         return seconds > 0 ? _t("Další načtení z banky za %s s", seconds) : _t("Načítám z banky…");
+    }
+
+    /** Skutečný interval mezi dotazy na banku (30 s / počet Fio tokenů). */
+    get intervalLabel() {
+        return _t("každých %s s", this.pending.interval || 30);
     }
 
     formatDate(value) {

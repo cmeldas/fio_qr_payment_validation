@@ -3,7 +3,6 @@ from datetime import timedelta
 
 from odoo import fields, models
 
-from .fio_api import RATE_LIMIT_SECONDS
 from .fio_bank_transaction import AMOUNT_TOLERANCE, TIP_MAX_RATIO
 
 
@@ -13,15 +12,16 @@ class PosPaymentMethod(models.Model):
     def fio_check_qr_payment(self, amount, pos_reference, currency_id):
         """Volá pokladna, dokud je otevřený QR kód platby.
 
-        Stáhne nové pohyby z Fio (nejvýš jednou za 30 s) a hledá příchozí pohyb, který platbu
-        pokrývá (stejná částka nebo vyšší o dýško, nikdy nižší) a má číslo objednávky ve zprávě.
+        Stáhne nové pohyby z Fio dalším tokenem v pořadí (interval 30 s / počet tokenů) a hledá
+        příchozí pohyb, který platbu pokrývá (stejná částka nebo vyšší o dýško, nikdy nižší)
+        a má číslo objednávky ve zprávě.
         Když číslo chybí, vezme jediný dnešní nebo včerejší nespárovaný pohyb v částce platby
         až platby + 50 % (platba právě probíhá, plátce zprávu neposlal). Nalezený pohyb si
         rezervuje pro objednávku; spáruje se po jejím uložení.
         """
         self.ensure_one()
         bank = self.sudo().journal_id.bank_account_id
-        if not bank or not bank.fio_api_token:
+        if not bank or not bank.fio_enabled:
             return {"enabled": False}
         synced = bank.fio_sync_recent()
         Transaction = self.env["fio.bank.transaction"].sudo()
@@ -61,8 +61,10 @@ class PosPaymentMethod(models.Model):
         return {
             "enabled": True,
             "confirmed": False,
-            # pro odpočet v pokladně: právě teď staženo z banky? a za kolik sekund to jde znovu
+            # pro odpočet v pokladně: právě teď staženo z banky? za kolik sekund to jde znovu
+            # a jaký je skutečný interval mezi dotazy (30 s / počet tokenů)
             "synced": bool(synced),
             "next_check_in": bank._fio_seconds_until_allowed(),
-            "rate_limit": RATE_LIMIT_SECONDS,
+            "interval": bank._fio_interval_seconds(),
+            "token_count": len(bank._fio_tokens()),
         }

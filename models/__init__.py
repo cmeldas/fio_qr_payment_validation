@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 from . import fio_api
+from . import fio_api_token
 from . import res_partner_bank
 from . import fio_bank_transaction
 from . import pos_payment

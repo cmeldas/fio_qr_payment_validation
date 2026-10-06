@@ -5,8 +5,6 @@ import pytz
 
 from odoo import api, fields, models
 
-from .fio_api import RATE_LIMIT_SECONDS
-
 TIPS_ACTION_XMLID = "fio_qr_payment_validation.action_fio_tips"
 
 FIO_STATES = [
@@ -121,8 +119,10 @@ class PosPayment(models.Model):
             "tip_today_count": tip_today_count,
             "tips_url": f"/odoo/action-{TIPS_ACTION_XMLID}",
             # pro odpočet v popupu: za kolik sekund Fio dovolí další dotaz (0 = hned)
+            # a skutečný interval mezi dotazy (30 s / počet tokenů)
             "next_check_in": max([bank._fio_seconds_until_allowed() for bank in banks], default=0),
-            "rate_limit": RATE_LIMIT_SECONDS,
+            "interval": max([bank._fio_interval_seconds() for bank in banks], default=0),
+            "token_count": min([len(bank._fio_tokens()) for bank in banks], default=0),
             "bank_enabled": bool(banks),
             "payments": [
                 {
@@ -141,8 +141,8 @@ class PosPayment(models.Model):
 
     @api.model
     def fio_refresh_from_bank(self, config_id):
-        """Tlačítko „Načíst platby z banky“ v pokladně: stáhne nové pohyby z Fio pro účty QR metod
-        této pokladny (limit 30 s), spáruje čekající platby a vrátí obnovený přehled.
+        """Otevřený popup čekajících plateb v pokladně: stáhne nové pohyby z Fio pro účty QR metod
+        této pokladny (dalším tokenem v pořadí), spáruje čekající platby a vrátí obnovený přehled.
 
         `synced` – dotaz na Fio proběhl; `wait` – za kolik sekund Fio dovolí další dotaz;
         `error` – poslední chyba Fio (např. neplatný token).
@@ -162,20 +162,20 @@ class PosPayment(models.Model):
                     result["error"] = bank.fio_last_error
                 else:
                     # zarážka `last` se právě nastavila nebo účet dotazuje někdo jiný: zkusit za chvíli
-                    result["wait"] = max(result["wait"], bank._fio_seconds_until_allowed() or 30)
+                    result["wait"] = max(result["wait"], bank._fio_seconds_until_allowed() or bank._fio_interval_seconds())
             self.env["fio.bank.transaction"].sudo()._match_pending()
         result.update(self.fio_pending_overview(config_id))
         return result
 
     @api.model
     def _fio_banks_for_config(self, config):
-        """Účty s Fio tokenem u QR platebních metod dané pokladny."""
+        """Účty s aktivním Fio tokenem u QR platebních metod dané pokladny."""
         if not config:
             return self.env["res.partner.bank"].sudo()
         methods = config.sudo().payment_method_ids.filtered(
             lambda m: m.payment_method_type == "qr_code" or m.qr_code_method
         )
-        return methods.journal_id.bank_account_id.filtered("fio_api_token")
+        return methods.journal_id.bank_account_id.filtered("fio_enabled")
 
     @api.model
     def _fio_today_bounds(self):

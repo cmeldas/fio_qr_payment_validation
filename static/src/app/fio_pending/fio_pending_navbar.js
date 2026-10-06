@@ -24,7 +24,7 @@ patch(PosStore.prototype, {
             tipsUrl: "",
             bankEnabled: false,
             nextAllowedAt: 0, // kdy Fio zase dovolí dotaz (ms)
-            rateLimit: 30, // s
+            interval: 30, // s mezi dotazy na banku (30 s / počet tokenů)
             loading: false,
             message: "",
             messageType: "",
@@ -39,7 +39,7 @@ patch(PosStore.prototype, {
         this.fioPending.tipTodayCount = result.tip_today_count || 0;
         this.fioPending.tipsUrl = result.tips_url || "";
         this.fioPending.bankEnabled = Boolean(result.bank_enabled);
-        this.fioPending.rateLimit = result.rate_limit || 30;
+        this.fioPending.interval = result.interval || 30;
         this.fioPending.nextAllowedAt = Date.now() + (result.next_check_in || 0) * 1000;
     },
 

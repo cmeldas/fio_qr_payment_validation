@@ -55,30 +55,37 @@ lze ručně spárovat (s platbou v pokladně nebo fakturou) nebo ignorovat.
    **sledování účtu** (čtení). Zřízení se silně autorizuje (SMS / push), token má 64 znaků,
    **funguje až 5 minut po autorizaci** a platí nejdéle 180 dní (volitelně se prodlužuje při
    každém přihlášení do bankovnictví); po vypršení vydat nový a přepsat ho v Odoo.
+   **Víc tokenů k jednomu účtu = častější dotazy** (viz Limity Fio API): 2 tokeny 15 s,
+   3 tokeny 10 s, 6 tokenů 5 s.
 2. V Odoo: _Fakturace › Konfigurace › Bankovní účty_ → účet, na který chodí QR platby
-   (účet přiřazený bankovnímu deníku platební metody QR) → záložka **Fio** → vložit token.
-   Záložku vidí jen správce systému.
-3. **Historie starší 90 dní**: Fio ji přes API vydá jen po dočasném odemknutí – v bankovnictví
-   _Nastavení › API_ kliknout u tokenu na **ikonu zámku** a pokyn autorizovat; přístup platí
-   **10 minut**. Hned potom v Odoo tlačítko **Načíst historii** (výchozí „Historie od“ = pár dní
-   před první QR platbou v pokladně; nastaví instalace). Import běží na pozadí přes cron po
-   ročních blocích s pauzou 35 s (dva až tři dotazy), stav ukazuje „Historie stažena do“. Po
-   dokončení se na Fio nastaví zarážka za poslední pohyb, aby hodinový `last` navazoval.
+   (účet přiřazený bankovnímu deníku platební metody QR) → záložka **Fio** → **API tokeny** →
+   *Přidat položku*, název (třeba datum vydání) a token, uložit. Záložku vidí jen správce
+   systému; hodnota tokenu se po uložení ukazuje jen jako hvězdičky. Pod seznamem je počet
+   aktivních tokenů a skutečný interval mezi dotazy. Token jde dočasně vypnout přepínačem
+   *Aktivní*; u každého je jeho poslední dotaz, zarážka a poslední chyba.
+3. **Historie starší 90 dní**: stahuje se **prvním tokenem v seznamu** (pořadí jde přetáhnout).
+   Fio ji přes API vydá jen po dočasném odemknutí – v bankovnictví _Nastavení › API_ kliknout
+   **u toho tokenu** na **ikonu zámku** a pokyn autorizovat; přístup platí **10 minut** a jen
+   pro ten token. Hned potom v Odoo tlačítko **Načíst historii** (výchozí „Historie od“ = pár
+   dní před první QR platbou v pokladně; nastaví instalace). Import běží na pozadí přes cron po
+   ročních blocích s pauzou 35 s (dva až tři dotazy), stav ukazuje „Historie stažena do“.
    Bez odemknutí skončí import chybou **HTTP 422** a zastaví se; po autorizaci ho stačí spustit
    znovu (už stažené pohyby se přeskočí).
-4. Bez importu historie se při prvním stažení jen nastaví zarážka `last` 85 dní zpět (Fio
-   jinak sáhne do celé historie a vrátí 422); druhé stažení o 30 s později už pohyby přinese.
+4. Každý token si při svém prvním použití nastaví zarážku `last` 85 dní zpět (Fio jinak sáhne
+   do celé historie a vrátí 422) – ten dotaz pohyby ještě nestáhne, další už ano. Co token
+   stáhne podruhé (pohyby, které už přinesl jiný token), se podle Fio ID přeskočí. Když se
+   token přes 90 dní nepoužije a Fio vrátí 422, zarážku si nastaví znovu sám.
 5. Zkontrolovat _Prodejní místo › Objednávky › QR platby ke kontrole_ – co se nespárovalo,
    ručně potvrdit nebo ignorovat.
 
-Jeden token má u Fio jednu zarážku `last`. Když stejný token používá lokální testovací Odoo
-i produkce, přetahují se o ni a část pohybů dostane jen jedna strana – pro lokální testy
-vydat druhý token, nebo ho z lokální databáze po testu smazat.
+Lokální testovací Odoo a produkce nesmí sdílet stejné tokeny: dotazy by si navzájem
+ubíraly limit 30 s a přetahovaly by se o zarážku `last`. Pro lokální testy vydat vlastní
+token, nebo ho z lokální databáze po testu smazat.
 
 Cron **Fio: stáhnout nové pohyby a spárovat platby** běží každých 5 minut (Nastavení ›
 Technické › Naplánované akce), Fio ale volá jen při běžící pokladně, jinak po hodině. Ručně:
 tlačítka **Načíst nové pohyby** a **Spárovat čekající** na účtu; v pokladně stačí otevřít popup
-čekajících plateb, který stahuje z banky každých 30 s sám.
+čekajících plateb, který stahuje z banky sám, tak často, jak tokeny dovolí.
 
 V přehledu **QR platby ke kontrole** jsou nad vybranými řádky hromadné akce *Potvrdit ručně*,
 *Ignorovat* a *Vrátit ke kontrole*; potvrzení a ignorování mění jen platby ve stavu *Čeká na
@@ -86,13 +93,18 @@ banku*, platby potvrzené bankou zůstanou.
 
 ## Limity Fio API
 
-Fio dovolí **jeden dotaz za 30 s** na token (jinak HTTP 409). Modul si u účtu pamatuje čas
-posledního dotazu a nikdy nevolá dřív – ať se ptá pokladna, cron nebo tlačítko. Souběžné
-požadavky řeší zámek řádku účtu. Pokladna při otevřeném QR volá server každých 5 s, ale Fio
-se skutečně dotáže jen jednou za 30 s; párování mezitím běží nad už staženými pohyby.
+Fio dovolí **jeden dotaz za 30 s na token** (jinak HTTP 409), a tokenů může být k účtu víc.
+Modul je volá **postupně za sebou** – vždy ten aktivní, který se nejdéle nepoužil – a dotazy
+na účet rozkládá rovnoměrně: **interval = 30 s / počet aktivních tokenů**, zaokrouhleno nahoru,
+nejméně 2 s (1 token 30 s, 2 tokeny 15 s, 3 tokeny 10 s, 4 tokeny 8 s, 6 tokenů 5 s). Žádný
+token se nepoužije dřív než po 30 s, ať se ptá pokladna, cron nebo tlačítko; souběžné požadavky
+řeší zámek řádku účtu. Pokladna při otevřeném QR se ptá serveru přesně ve chvíli dalšího
+dotazu (nejpozději po 5 s) a ukazatel s textem „Další kontrola banky za N s (každých M s)“
+ukazuje skutečný interval; stejně tak popup čekajících plateb. Párování mezi dotazy běží nad
+už staženými pohyby.
 
-Chybové kódy Fio (dokumentace API Bankovnictví, verze 16. 10. 2025), text chyby je u účtu
-v poli „Poslední chyba Fio“:
+Chybové kódy Fio (dokumentace API Bankovnictví, verze 16. 10. 2025), text chyby je u tokenu
+v seznamu a u účtu v poli „Poslední chyba Fio“ (s názvem tokenu):
 
 | kód | význam                                  | co s tím                                                        |
 | --- | --------------------------------------- | --------------------------------------------------------------- |
@@ -114,7 +126,9 @@ v poli „Poslední chyba Fio“:
 ## Technicky
 
 - Modely: `fio.bank.transaction` (pohyby, unikátní `bank_account_id` + `fio_id`),
-  rozšíření `res.partner.bank` (token, limit, historie), `pos.payment` (`fio_state`,
+  `fio.api.token` (tokeny účtu: hodnota jen pro `base.group_system`, vlastní `last_request_at`,
+  `bookmark_set`, `last_error`), rozšíření `res.partner.bank` (`fio_token_ids`, výběr tokenu
+  `_fio_pick_token`, rozestup `_fio_interval_seconds`, historie), `pos.payment` (`fio_state`,
   `fio_transaction_id`), `pos.payment.method.fio_check_qr_payment()` (RPC pro pokladnu),
   `account.move` / `account.payment` (vazby), průvodce `fio.match.wizard`.
 - Fio klient `models/fio_api.py` – čisté funkce (`fetch_last`, `fetch_periods`,
