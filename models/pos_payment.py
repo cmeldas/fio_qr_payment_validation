@@ -15,7 +15,10 @@ FIO_STATES = [
     ("ignored", "Ignorováno"),
 ]
 
-# Pole, která pokladna nemá načítat: Odoo 19 posílá pokladně u plateb všechna pole a při
+# Typ platební metody „bankovní aplikace (QR kód)“; v Odoo 19 se jmenoval `qr_code`.
+QR_METHOD_TYPE = "bank_qr_code"
+
+# Pole, která pokladna nemá načítat: Odoo 19 i 20 posílá pokladně u plateb všechna pole a při
 # uložení objednávky je vrací (nová platba by přišla s fio_state=False a spadla na NOT NULL;
 # stav ověření patří jen serveru).
 FIO_SERVER_ONLY_FIELDS = (
@@ -40,7 +43,7 @@ class PosPayment(models.Model):
     def _is_fio_qr_payment(self):
         self.ensure_one()
         method = self.payment_method_id
-        return method.payment_method_type == "qr_code" or bool(method.qr_code_method)
+        return method.payment_method_type == QR_METHOD_TYPE or bool(method.qr_code_method)
 
     @api.model
     def _load_pos_data_fields(self, config):
@@ -173,7 +176,7 @@ class PosPayment(models.Model):
         if not config:
             return self.env["res.partner.bank"].sudo()
         methods = config.sudo().payment_method_ids.filtered(
-            lambda m: m.payment_method_type == "qr_code" or m.qr_code_method
+            lambda m: m.payment_method_type == QR_METHOD_TYPE or m.qr_code_method
         )
         return methods.journal_id.bank_account_id.filtered("fio_enabled")
 

@@ -1,6 +1,6 @@
 # Fio: ověření QR plateb
 
-Modul pro Odoo 19 (Community). Stahuje pohyby z účtu u **Fio banky** a páruje je s QR
+Modul pro Odoo 20 (Community), větev `20.0`; verze pro Odoo 19 je na větvi `19.0`. Stahuje pohyby z účtu u **Fio banky** a páruje je s QR
 platbami z pokladny a s fakturami. Když je v pokladně otevřený QR kód, ptá se banky
 průběžně a při shodě platbu **potvrdí sám** – obsluze i zákazníkovi na displeji se ukáže
 „Automaticky potvrzeno“. Stávající platební metoda QR (např. `qr_czk` z modulu
@@ -10,7 +10,7 @@ průběžně a při shodě platbu **potvrdí sám** – obsluze i zákazníkovi 
 
 | Kde                       | Co se děje                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Pokladna, otevřený QR kód | Každých 5 s se pokladna ptá serveru; server stáhne nové pohyby z Fio (nejvýš jednou za 30 s) a hledá příchozí pohyb, který platbu pokrývá (stejná částka nebo vyšší o dýško) a má číslo objednávky ve zprávě. Během čekání běží ukazatel: plný hned po stažení z banky, prázdný ve chvíli další kontroly (30 s), s textem „Další kontrola banky za N s“, takže obsluha ví, zda má smysl počkat. Při shodě: zelené „Automaticky potvrzeno“ (s výší dýška) a banner „Platba přijata“ na zákaznickém displeji – obojí zůstává, dokud obsluha neklikne na „Potvrdit platbu“ (zelené tlačítko). Ruční potvrzení bez čekání na banku je dál možné. |
+| Pokladna, otevřený QR kód | Každých 5 s se pokladna ptá serveru; server stáhne nové pohyby z Fio (nejvýš jednou za 30 s) a hledá příchozí pohyb, který platbu pokrývá (stejná částka nebo vyšší o dýško) a má číslo objednávky ve zprávě. Během čekání běží ukazatel: plný hned po stažení z banky, prázdný ve chvíli další kontroly (30 s), s textem „Další kontrola banky za N s“, takže obsluha ví, zda má smysl počkat. Při shodě: zelené „Automaticky potvrzeno“ (s výší dýška) a banner „Platba přijata“ na zákaznickém displeji – obojí zůstává, dokud obsluha nepotvrdí platbu v QR dialogu (tlačítko potvrzení zezelená). Ruční potvrzení bez čekání na banku je dál možné. |
 | Lišta pokladny            | Ikona peněz s červeným počtem QR plateb této pokladny, které banka ještě nepotvrdila (za posledních N dní podle nastavení pokladny, výchozí 14). Kliknutím popup s datem a časem, číslem objednávky, částkou a tlačítkem _Detail_ (otevře objednávku v seznamu účtenek); dokud je popup otevřený, **stahuje pohyby z banky tak rychle, jak Fio dovolí** (jednou za 30 s) a čekající platby hned páruje; ukazatel odpočítává do dalšího stažení („Další načtení z banky za N s“), vedle je čas posledního stažení a počet spárovaných; dole **Dýška dnes** (součet dýšek z dnešních QR plateb této pokladny) a odkaz na přehled všech dýšek. Počet se obnovuje po každém uložení objednávky a každou minutu; platba zmizí po spárování bankou, ručním potvrzení nebo ignorování v administraci. |
 | Dýška                     | _Prodejní místo › Objednávky › Dýška z QR plateb_: pohyby, které přišly vyšší než objednávka, seskupené **po dnech platby v pokladně** se součty; přepínání na pivot (po dnech / týdnech / měsících) a graf, filtr podle pokladny.                                                                                                                                                                                                                                  |
 | Uložení objednávky        | Nová QR platba dostane stav **Čeká na banku**. Když už pohyb existuje (rozpoznaný při otevřeném QR nebo stažený cronem), spáruje se hned → **Potvrzeno bankou**.                                                                                                                                                                                                                                                                                           |
@@ -27,7 +27,7 @@ průběžně a při shodě platbu **potvrdí sám** – obsluze i zákazníkovi 
 | Potvrzeno ručně  | Obsluha/manažer platbu zkontroloval jinak (výpis, potvrzení plátce). Cron ji dál zkouší spárovat; když pohyb dorazí, změní se na _Potvrzeno bankou_. |
 | Ignorováno       | Vědomě vyřazeno z kontroly (storno, chybný záznam, peníze nepřišly). Když peníze s číslem objednávky ve zprávě přece jen dorazí, platba se spáruje a přejde na _Potvrzeno bankou_ (u pohybu poznámka). |
 
-Potvrzení v pokladně („Potvrdit platbu“ u QR kódu) **není** kontrola – platba jen odejde na
+Potvrzení v pokladně (tlačítko potvrzení v QR dialogu) **není** kontrola – platba jen odejde na
 pozadí do stavu _Čeká na banku_.
 
 ### Jak se páruje
@@ -83,8 +83,11 @@ lze ručně spárovat (s platbou v pokladně nebo fakturou) nebo ignorovat.
    ručně potvrdit nebo ignorovat.
 
 Lokální testovací Odoo a produkce nesmí sdílet stejné tokeny: dotazy by si navzájem
-ubíraly limit 30 s a přetahovaly by se o zarážku `last`. Pro lokální testy vydat vlastní
-token, nebo ho z lokální databáze po testu smazat.
+ubíraly limit 30 s a přetahovaly by se o zarážku `last` (co stáhne kopie, produkce už přes
+`last` nedostane). Pro lokální testy vydat vlastní token, nebo ho z lokální databáze po testu
+smazat. **Neutralizace** databáze (`odoo neutralize`, obnova zálohy s volbou „neutralize“)
+to dělá sama: `data/neutralize.sql` všechny tokeny vypne, jejich hodnotu zahodí a vypne
+párování i běžící import historie na účtech (crony vypíná neutralizace jádra).
 
 Cron **Fio: stáhnout nové pohyby a spárovat platby** běží každých 5 minut (Nastavení ›
 Technické › Naplánované akce), Fio ale volá jen při běžící pokladně, jinak po hodině. Ručně:
@@ -141,12 +144,13 @@ v seznamu a u účtu v poli „Poslední chyba Fio“ (s názvem tokenu):
   `set_last_id`, `parse_transactions`), sloupce podle dokumentace Fio
   (`column22` ID, `column0` datum, `column1` částka, `column5` VS, `column16` zpráva,
   `column7` identifikace, `column25` komentář).
-- JS: `static/src/app/qr_popup_fio.*` rozšiřuje `QRPopup` pokladny (polling, zelené
-  potvrzení, které drží do kliknutí obsluhy); `static/src/app/fio_pending/*` ikona v liště
+- JS (OWL 3): `static/src/app/qr_popup_fio.*` rozšiřuje `QRPopup` pokladny (polling, zelené
+  potvrzení, které drží do kliknutí obsluhy) a `PosPayment.getQrPopupProps()` (UUID platby
+  `fioPaymentUuid` a příznak `fioConfirmed`); `static/src/app/fio_pending/*` ikona v liště
   (`Navbar`) s počtem čekajících plateb, popup `FioPendingDialog` a obnova po
-  `PosStore.syncAllOrders`; `static/src/customer_display/fio_customer_display.*` překryv na
+  `PosStore.syncAllOrders`; `static/src/customer_display/fio_customer_display.xml` překryv na
   zákaznickém displeji (bundle `point_of_sale.customer_display_assets`), viditelný dokud
-  pokladna posílá `qrPaymentData.fioConfirmed`.
+  pokladna v datech QR posílá `fioConfirmed`.
 - Nastavení pokladny: _Nespárované QR platby: dny zpět_ (`pos.config.fio_pending_days`,
   výchozí 14, 0 = bez omezení) určuje, co ikona v liště počítá; data dodává
   `pos.payment.fio_pending_overview(config_id)`, tlačítko v popupu
@@ -154,7 +158,7 @@ v seznamu a u účtu v poli „Poslední chyba Fio“ (s názvem tokenu):
   `pos.config.fio_pos_last_seen` (nejvýš po 30 s); cron podle něj pozná běžící pokladnu.
 - Instalace (`post_init_hook`): všechny dosavadní QR platby → _Čeká na banku_; „Historie od“
   na účtu deníku QR metody.
-- Pokladna Odoo 19 načítá u `pos.payment` **všechna pole** (`_load_pos_data_fields` vrací `[]`)
+- Pokladna Odoo 19 i 20 načítá u `pos.payment` **všechna pole** (`_load_pos_data_fields` vrací `[]`)
   a při uložení objednávky je posílá zpět – nová platba by přišla s `fio_state = False` a spadla
   na povinném poli. Modul proto pole `fio_*` a `pos_reference` z načítání do pokladny vyřazuje
   a prázdný `fio_state` v `create`/`write` ignoruje (objednávky uložené v prohlížeči před
@@ -164,7 +168,54 @@ v seznamu a u účtu v poli „Poslední chyba Fio“ (s názvem tokenu):
 ## Testy
 
 ```
-odoo -d db19test -i fio_qr_payment_validation --test-enable --test-tags /fio_qr_payment_validation --stop-after-init
+docker compose -f odoo20/docker-compose.yml run --rm odoo odoo -c /etc/odoo/odoo.conf -d t20_fio --db-filter='^t20_fio$' \
+    -i fio_qr_payment_validation --without-demo=all --test-enable --test-tags /fio_qr_payment_validation --stop-after-init
 ```
 
-Testy nevolají Fio – používají ukázkovou odpověď API (`tests/fio_payload.py`).
+Testy nevolají Fio – používají ukázkovou odpověď API (`fio_payload()` v `tests/test_fio_matching.py`).
+Ověřují i neutralizaci (`data/neutralize.sql`) a migrační skript 19 → 20.
+
+## Odoo 20
+
+Port z 19.0.1.2.0 na **20.0.1.2.0** (chování stejné, data modulu beze změny):
+
+- **Práva**: `security/ir.model.access.csv` → `security/ir.access.csv` (nový model `ir.access`,
+  sloupce `operation` = `r` / `crud`, prázdná `domain`); stejná XML ID i skupiny jako v 19.
+- **Typ QR platební metody** se v Odoo 20 jmenuje `bank_qr_code` (v 19 `qr_code`); upravené
+  rozpoznání QR plateb (`pos.payment._is_fio_qr_payment`, účty pokladny pro lištu) i instalační
+  hook. Účet je `res.partner.bank.account_number` (v 19 `acc_number`).
+- **Pokladna (OWL 3)**: `QRPopup` je v 20 obecný dialog bez platebního řádku v props
+  (`line`, `order` zmizely); modul si přidá `fioPaymentUuid` do `getQrPopupProps()` a řádek si
+  najde podle UUID, polling běží jen u bankovních QR plateb (online platby a terminály se
+  nemění). Rozšíření šablony míří na `point_of_sale.QRPopup` (dřív
+  `point_of_sale.QRConfirmationDialog`); tlačítko potvrzení je v 20 výchozí modré, po potvrzení
+  bankou zezelená. Šablony používají `this.` (OWL 3 nepřebírá vlastnosti komponenty jako
+  proměnné), `useState` → `proxy`, `static props` → `useProps`, `env.utils.formatCurrency` →
+  `pos.formatCurrency`.
+- **Zákaznický displej** dostává v 20 QR jako `qrData` z `getQrPopupProps()` vybraného platebního
+  řádku; modul do nich přidá `fioConfirmed` (z `uiState` řádku) a displej překreslí. Úprava
+  `CustomerFacingQR.props` (komponenta v 20 není) odpadla.
+- **Ikony**: Odoo 20 už nemá FontAwesome; tlačítka ve views (`icon="account_balance"`, `link`,
+  `block`, `undo`, `check`) i šablony pokladny (`<i class="oi" data-icon="…"/>`) používají
+  Material Symbols.
+- **Neutralizace**: nový `data/neutralize.sql` (viz výše), v 19 chyběl.
+
+### Migrace dat 19 → 20
+
+`migrations/20.0.1.2.0/pre-migrate.py` (jen SQL, běží před načtením dat modulu):
+
+1. Smaže XML ID modulu, která v `ir_model_data` ukazují na zrušené `ir.model.access` /
+   `ir.rule` (i staré řádky práv, pokud tabulka ještě je); jinak by načtení `ir.access.csv` se
+   stejnými XML ID spadlo na „record of different model“. Práva pak modul založí znovu.
+   Pokud je už převedl migrační rámec (XML ID ukazují na `ir.access`), nic nedělá.
+2. Pojistka za skripty `point_of_sale`: `pos_payment_method.payment_method_type`
+   `qr_code` → `bank_qr_code` (na produkci metoda „QR“, `qr_czk`). Bez toho pokladna QR kód
+   nezobrazí. Když hodnotu převedly migrační skripty jádra, nic nemění.
+
+Vlastní tabulky a sloupce modulu (`fio_bank_transaction`, `fio_api_token`, `pos_payment.fio_*`,
+`res_partner_bank.fio_*`, `pos_config.fio_*`, `account_payment.fio_transaction_id`) se nemění.
+Skript `19.0.1.2.0` zůstává: produkce, která by šla na 20 ještě z 19.0.1.1.0 (token na účtu),
+dostane převod tokenu do seznamu tokenů ve stejném běhu. Od skriptů jádra modul potřebuje jen
+to, aby bankovní účty (`res.partner.bank`), platby pokladny a platební metody zůstaly se stejnými
+id; přejmenování `acc_number` → `account_number` a zrušení `res.bank` řeší skripty jádra
+a `cz_qr_payment`.

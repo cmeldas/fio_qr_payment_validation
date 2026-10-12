@@ -27,11 +27,11 @@
                 <field name="tip_amount" optional="show" sum="Dýška"/>
                 <field name="move_id" optional="show"/>
                 <field name="note" optional="hide"/>
-                <button name="action_open_match_wizard" type="object" icon="fa-link" title="Ručně spárovat"
+                <button name="action_open_match_wizard" type="object" icon="link" title="Ručně spárovat"
                         invisible="state != 'new' or not is_incoming"/>
-                <button name="action_ignore" type="object" icon="fa-ban" title="Ignorovat"
+                <button name="action_ignore" type="object" icon="block" title="Ignorovat"
                         invisible="state != 'new'"/>
-                <button name="action_reset" type="object" icon="fa-undo" title="Zrušit spárování / ignorování"
+                <button name="action_reset" type="object" icon="undo" title="Zrušit spárování / ignorování"
                         invisible="state == 'new'"/>
             </list>
         </field>

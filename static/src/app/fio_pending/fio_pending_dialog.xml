@@ -2,26 +2,26 @@
 <templates id="template" xml:space="preserve">
 
     <t t-name="fio_qr_payment_validation.FioPendingDialog">
-        <Dialog size="'md'" title="title">
-            <div t-if="pending.bankEnabled" class="fio-bank-countdown mb-2">
+        <Dialog size="'md'" title="this.title">
+            <div t-if="this.pending.bankEnabled" class="fio-bank-countdown mb-2">
                 <div class="d-flex flex-wrap justify-content-between small text-muted gap-2">
                     <span class="fio-bank-countdown-label">
-                        <i class="fa fa-refresh me-1" t-att-class="{ 'fa-spin': pending.loading }" role="img" aria-label="Banka"/>
-                        <t t-esc="countdownLabel"/>
-                        <span class="fio-bank-interval ms-1 opacity-75">(<t t-esc="intervalLabel"/>)</span>
+                        <i class="oi me-1" data-icon="autorenew" t-att-class="{ 'oi-spin': this.pending.loading }" role="img" aria-label="Banka"/>
+                        <t t-out="this.countdownLabel()"/>
+                        <span class="fio-bank-interval ms-1 opacity-75">(<t t-out="this.intervalLabel()"/>)</span>
                     </span>
-                    <span t-if="pending.message" class="fio-refresh-message" t-att-class="{ 'text-success': pending.messageType === 'success', 'text-danger': pending.messageType === 'danger', 'text-warning': pending.messageType === 'warning' }" t-esc="pending.message"/>
+                    <span t-if="this.pending.message" class="fio-refresh-message" t-att-class="{ 'text-success': this.pending.messageType === 'success', 'text-danger': this.pending.messageType === 'danger', 'text-warning': this.pending.messageType === 'warning' }" t-out="this.pending.message"/>
                 </div>
                 <div class="progress mt-1" style="height: 6px;">
                     <div class="progress-bar bg-info fio-bank-progress" role="progressbar"
-                         t-attf-style="width: {{ progressPercent }}%; transition: width 0.25s linear;"/>
+                         t-attf-style="width: {{ this.progressPercent() }}%; transition: width 0.25s linear;"/>
                 </div>
             </div>
             <div t-else="" class="small text-muted mb-2">
-                <i class="fa fa-university me-1" role="img" aria-label="Banka"/>Žádný účet s Fio tokenem u QR metod této pokladny; platby páruje jen cron.
+                <i class="oi me-1" data-icon="account_balance" role="img" aria-label="Banka"/>Žádný účet s Fio tokenem u QR metod této pokladny; platby páruje jen cron.
             </div>
-            <div t-if="!pending.payments.length" class="text-muted py-3 text-center">
-                <i class="fa fa-check-circle text-success me-1" role="img" aria-label="OK"/>
+            <div t-if="!this.pending.payments.length" class="text-muted py-3 text-center">
+                <i class="oi oi-filled text-success me-1" data-icon="check_circle" role="img" aria-label="OK"/>
                 Žádné QR platby nečekají na banku.
             </div>
             <div t-else="" class="fio-pending-list overflow-auto" style="max-height: 55vh;">
@@ -35,39 +35,39 @@
                         </tr>
                     </thead>
                     <tbody>
-                        <tr t-foreach="pending.payments" t-as="row" t-key="row.id" class="fio-pending-row">
-                            <td class="text-nowrap" t-esc="formatDate(row.payment_date)"/>
+                        <tr t-foreach="this.pending.payments" t-as="row" t-key="row.id" class="fio-pending-row">
+                            <td class="text-nowrap" t-out="this.formatDate(row.payment_date)"/>
                             <td>
-                                <div class="fw-bold" t-esc="orderLabel(row)"/>
-                                <div t-if="row.partner_name" class="small text-muted" t-esc="row.partner_name"/>
+                                <div class="fw-bold" t-out="this.orderLabel(row)"/>
+                                <div t-if="row.partner_name" class="small text-muted" t-out="row.partner_name"/>
                             </td>
-                            <td class="text-end text-nowrap fw-bold" t-esc="formatAmount(row.amount)"/>
+                            <td class="text-end text-nowrap fw-bold" t-out="this.formatAmount(row.amount)"/>
                             <td class="text-end">
                                 <button class="btn btn-sm btn-secondary text-nowrap" t-on-click="() => this.openOrder(row)">
-                                    <i class="fa fa-external-link me-1" role="img" aria-label="Otevřít"/>Detail
+                                    <i class="oi me-1" data-icon="open_in_new" role="img" aria-label="Otevřít"/>Detail
                                 </button>
                             </td>
                         </tr>
                     </tbody>
                 </table>
             </div>
-            <div t-if="pending.count > pending.payments.length" class="small text-muted mt-2">
-                Zobrazeno <t t-esc="pending.payments.length"/> z <t t-esc="pending.count"/>; všechny jsou v administraci
+            <div t-if="this.pending.count > this.pending.payments.length" class="small text-muted mt-2">
+                Zobrazeno <t t-out="this.pending.payments.length"/> z <t t-out="this.pending.count"/>; všechny jsou v administraci
                 (Prodejní místo › Objednávky › QR platby ke kontrole).
             </div>
             <div class="fio-tips-today d-flex flex-wrap align-items-center gap-2 mt-3 pt-2 border-top">
                 <span>
-                    <i class="fa fa-gift text-success me-1" role="img" aria-label="Dýška"/>
+                    <i class="oi text-success me-1" data-icon="card_giftcard" role="img" aria-label="Dýška"/>
                     <span class="fw-bold">Dýška dnes: </span>
-                    <span class="fio-tips-today-amount" t-esc="formatAmount(pending.tipToday)"/>
-                    <span t-if="pending.tipTodayCount" class="text-muted small ms-1">(<t t-esc="pending.tipTodayCount"/> QR plateb)</span>
+                    <span class="fio-tips-today-amount" t-out="this.formatAmount(this.pending.tipToday)"/>
+                    <span t-if="this.pending.tipTodayCount" class="text-muted small ms-1">(<t t-out="this.pending.tipTodayCount"/> QR plateb)</span>
                 </span>
-                <button class="btn btn-link btn-sm p-0 ms-auto fio-tips-link" t-if="pending.tipsUrl" t-on-click="openTips">
-                    <i class="fa fa-table me-1" role="img" aria-label="Tabulka"/>Všechna dýška po dnech
+                <button class="btn btn-link btn-sm p-0 ms-auto fio-tips-link" t-if="this.pending.tipsUrl" t-on-click="() => this.openTips()">
+                    <i class="oi me-1" data-icon="view_list" role="img" aria-label="Tabulka"/>Všechna dýška po dnech
                 </button>
             </div>
             <t t-set-slot="footer">
-                <button class="btn btn-primary" t-on-click="props.close">Zavřít</button>
+                <button class="btn btn-primary" t-on-click="() => this.props.close()">Zavřít</button>
             </t>
         </Dialog>
     </t>

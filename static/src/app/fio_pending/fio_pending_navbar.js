@@ -24,7 +24,7 @@ patch(PosStore.prototype, {
             tipsUrl: "",
             bankEnabled: false,
             nextAllowedAt: 0, // kdy Fio zase dovolí dotaz (ms)
-            interval: 30, // s mezi dotazy na banku (30 s / počet tokenů)
+            interval: 30, // s mezi dotazy na banku (32 s / počet tokenů)
             loading: false,
             message: "",
             messageType: "",
@@ -119,7 +119,7 @@ patch(PosStore.prototype, {
 
 patch(Navbar.prototype, {
     setup() {
-        super.setup();
+        super.setup(...arguments);
         let timer = null;
         onMounted(() => {
             this.pos.fioRefreshPending();
@@ -132,6 +132,6 @@ patch(Navbar.prototype, {
         this.pos.fioPending.message = "";
         this.pos.fioPending.messageType = "";
         await this.pos.fioRefreshPending();
-        this.env.services.dialog.add(FioPendingDialog, {});
+        this.dialog.add(FioPendingDialog, {});
     },
 });

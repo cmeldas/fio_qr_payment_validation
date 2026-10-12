@@ -99,11 +99,11 @@
                 <field name="fio_transaction_id" optional="show"/>
                 <field name="fio_tip_amount" optional="show"/>
                 <field name="fio_confirmed_at" optional="hide"/>
-                <button name="action_fio_confirm_manual" type="object" icon="fa-check" title="Potvrdit ručně (zkontrolováno)"
+                <button name="action_fio_confirm_manual" type="object" icon="check" title="Potvrdit ručně (zkontrolováno)"
                         invisible="fio_state != 'pending'" groups="point_of_sale.group_pos_manager"/>
-                <button name="action_fio_ignore" type="object" icon="fa-ban" title="Ignorovat"
+                <button name="action_fio_ignore" type="object" icon="block" title="Ignorovat"
                         invisible="fio_state != 'pending'" groups="point_of_sale.group_pos_manager"/>
-                <button name="action_fio_reset_pending" type="object" icon="fa-undo" title="Vrátit ke kontrole"
+                <button name="action_fio_reset_pending" type="object" icon="undo" title="Vrátit ke kontrole"
                         invisible="fio_state in ('none', 'pending')" groups="point_of_sale.group_pos_manager"/>
             </list>
         </field>

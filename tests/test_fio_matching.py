@@ -1,17 +1,23 @@
 # -*- coding: utf-8 -*-
 """Párování pohybů Fio s QR platbami pokladny a fakturami. Fio API se nevolá, odpovědi se podstrkují."""
 import ast
+import importlib.util
 from datetime import date, timedelta
 from unittest.mock import patch
 
 from odoo import Command, fields
 from odoo.exceptions import UserError, ValidationError
+from odoo.modules.neutralize import get_neutralization_queries
 from odoo.tools import mute_logger
+from odoo.tools.misc import file_path
 from psycopg2 import IntegrityError
 from odoo.tests import tagged
 from odoo.addons.point_of_sale.tests.common import CommonPosTest
 
 from ..models import fio_api
+
+# Testy chyb Fio (HTTP 409/422/500) záměrně vyvolávají chybové hlášky modulu; v logu testů je netřeba.
+BANK_LOGGER = "odoo.addons.fio_qr_payment_validation.models.res_partner_bank"
 
 
 def fio_cell(value):
@@ -63,7 +69,7 @@ class TestFioMatching(CommonPosTest):
             return_value=[("test_qr", "Testovací QR", 10)],
         ))
         cls.bank_account = cls.env["res.partner.bank"].create({
-            "acc_number": "CZ3820100000002401835999",
+            "account_number": "CZ3820100000002401835999",
             "partner_id": cls.env.company.partner_id.id,
             # jako po prvním kontaktu s Fio (zarážka nastavená); samotné nastavení testuje test_first_sync_sets_bookmark
             "fio_token_ids": [Command.create({"name": "A", "token": "a" * 64, "bookmark_set": True})],
@@ -74,7 +80,8 @@ class TestFioMatching(CommonPosTest):
             "bank_account_id": cls.bank_account.id,
         })
         cls.qr_payment_method = cls.env["pos.payment.method"].create({
-            "name": "QR", "journal_id": cls.bank_journal.id, "payment_method_type": "qr_code",
+            # Odoo 20: typ „bankovní aplikace (QR)“ je bank_qr_code (v 19 qr_code), `type` je povinný
+            "name": "QR", "type": "bank", "journal_id": cls.bank_journal.id, "payment_method_type": "bank_qr_code",
             "qr_code_method": "test_qr",
             "receivable_account_id": cls.company_data["default_account_receivable"].id,
         })
@@ -186,7 +193,7 @@ class TestFioMatching(CommonPosTest):
         self.assertEqual(txs[0].state, "new")
 
     def test_pos_client_does_not_load_fio_fields(self):
-        """Pokladna Odoo 19 posílá při uložení všechna načtená pole platby; stav ověření musí zůstat jen na serveru."""
+        """Pokladna Odoo 19 i 20 posílá při uložení všechna načtená pole platby; stav ověření musí zůstat jen na serveru."""
         fields_list = self.env["pos.payment"]._load_pos_data_fields(self.pos_config_usd)
         self.assertIn("amount", fields_list)
         self.assertIn("payment_method_id", fields_list)
@@ -400,6 +407,7 @@ class TestFioMatching(CommonPosTest):
             self.assertTrue(bank.fio_sync_recent())
             fetch_last.assert_called_once()
 
+    @mute_logger(BANK_LOGGER)
     def test_rate_limit_and_errors(self):
         bank = self.bank_account
         bank.fio_last_request_at = fields.Datetime.now()
@@ -537,6 +545,7 @@ class TestFioMatching(CommonPosTest):
         ])
         self.assertEqual(len(stored), 3)
 
+    @mute_logger(BANK_LOGGER)
     def test_history_import_stops_on_api_error(self):
         bank = self.bank_account
         bank.write({"fio_history_from": date.today() - timedelta(days=10)})
@@ -605,6 +614,7 @@ class TestFioMatching(CommonPosTest):
             self.assertFalse(bank.fio_sync_recent())
             fetch_last.assert_not_called()
 
+    @mute_logger(BANK_LOGGER)
     def test_all_tokens_cycle_with_sparse_calls_and_a_failing_token(self):
         """Řídké dotazy (cron po hodině) i nefunkční token: na řadu přijdou postupně všechny tokeny."""
         bank = self.bank_account
@@ -650,6 +660,7 @@ class TestFioMatching(CommonPosTest):
         new.token = "m" * 64
         self.assertFalse(new.bookmark_set, "jiná hodnota tokenu = nová zarážka")
 
+    @mute_logger(BANK_LOGGER)
     def test_stale_bookmark_422_resets_token(self):
         bank = self.bank_account
         token = bank.fio_token_ids
@@ -730,6 +741,7 @@ class TestFioMatching(CommonPosTest):
         (pending | confirmed).action_fio_confirm_manual()
         self.assertEqual(pending.fio_state, "manual", "ignorovanou lze ručně potvrdit")
 
+    @mute_logger(BANK_LOGGER)
     def test_refresh_from_bank_button(self):
         Payment = self.env["pos.payment"]
         config = self.pos_config_usd
@@ -765,3 +777,55 @@ class TestFioMatching(CommonPosTest):
         self.assertIn("500", failed["error"])
 
         self.assertEqual(Payment.fio_refresh_from_bank(self.pos_config_eur.id)["wait"], 0, "pokladna bez QR metody s Fio")
+
+    # ------------------------------------------------------------------
+    # Odoo 20: neutralizace kopie a migrace z 19
+    # ------------------------------------------------------------------
+    def test_neutralize_disables_tokens(self):
+        """Neutralizovaná kopie (lokální vývoj, test) se nesmí ptát banky produkčními tokeny."""
+        queries = list(get_neutralization_queries(["fio_qr_payment_validation"]))
+        self.assertEqual(len(queries), 1, "modul má data/neutralize.sql")
+        bank = self.bank_account
+        token = bank.fio_token_ids
+        bank.write({"fio_history_running": True})
+        self.env.flush_all()
+        self.env.cr.execute(queries[0])
+        self.env.invalidate_all()
+        self.assertFalse(token.active)
+        self.assertNotEqual(token.sudo().token, "a" * 64, "hodnota produkčního tokenu se zahodí")
+        self.assertFalse(token.bookmark_set)
+        self.assertFalse(bank.fio_enabled)
+        self.assertFalse(bank.fio_history_running)
+        with patch.object(fio_api, "fetch_last") as fetch_last:
+            self.assertEqual(
+                self.qr_payment_method.fio_check_qr_payment(1.0, "Order 1-1-000001", self.currency_id),
+                {"enabled": False},
+            )
+            self.env["res.partner.bank"]._cron_fio_sync()
+            fetch_last.assert_not_called()
+
+    def _migration(self, version, stage):
+        path = file_path(f"fio_qr_payment_validation/migrations/{version}/{stage}-migrate.py")
+        spec = importlib.util.spec_from_file_location(f"fio_migration_{stage}", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_migration_20_access_and_qr_method_type(self):
+        """19 → 20: stará XML ID práv (ir.model.access) pryč, typ QR metody qr_code → bank_qr_code."""
+        cr = self.env.cr
+        Data = self.env["ir.model.data"]
+        current = Data.search([("module", "=", "fio_qr_payment_validation"), ("model", "=", "ir.access")])
+        self.assertEqual(len(current), 6, "práva modulu jsou v 20 záznamy ir.access")
+        legacy = Data.create({
+            "module": "fio_qr_payment_validation", "name": "access_legacy_from_19",
+            "model": "ir.model.access", "res_id": 987654,
+        })
+        self.env.flush_all()
+        cr.execute("UPDATE pos_payment_method SET payment_method_type = 'qr_code' WHERE id = %s", (self.qr_payment_method.id,))
+        self._migration("20.0.1.2.0", "pre").migrate(cr, "19.0.1.2.0")
+        self.env.invalidate_all()
+        self.assertFalse(legacy.exists(), "XML ID na zrušený model ir.model.access se smaže")
+        self.assertEqual(len(current.exists()), 6, "XML ID ir.access zůstávají")
+        self.assertEqual(self.qr_payment_method.payment_method_type, "bank_qr_code")
+        self._migration("20.0.1.2.0", "pre").migrate(cr, "19.0.1.2.0")  # podruhé nic nerozbije

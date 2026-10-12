@@ -1,39 +1,36 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <templates id="template" xml:space="preserve">
 
-    <t t-name="fio_qr_payment_validation.QRConfirmationDialog" t-inherit="point_of_sale.QRConfirmationDialog" t-inherit-mode="extension">
-        <xpath expr="//img[@alt='QR Code']" position="attributes">
-            <attribute name="t-if">fio.status !== 'confirmed'</attribute>
+    <!-- Odoo 20: dialog QR platby je point_of_sale.QRPopup (dřív QRConfirmationDialog). -->
+    <t t-name="fio_qr_payment_validation.QRPopup" t-inherit="point_of_sale.QRPopup" t-inherit-mode="extension">
+        <xpath expr="//div[hasclass('qr-container')]" position="attributes">
+            <attribute name="t-if">this.fio.status !== 'confirmed'</attribute>
         </xpath>
-        <xpath expr="//img[@alt='QR Code']" position="after">
-            <div t-if="fio.status === 'confirmed'" class="fio_qr_confirmed alert alert-success text-center my-2 px-4 py-3">
-                <i class="fa fa-check-circle fa-3x d-block mb-2" role="img" aria-label="Potvrzeno"/>
+        <xpath expr="//div[hasclass('qr-container')]" position="after">
+            <div t-if="this.fio.status === 'confirmed'" class="fio_qr_confirmed alert alert-success text-center my-2 px-4 py-3 w-75">
+                <i class="oi oi-3x oi-filled d-block mb-2" data-icon="check_circle" role="img" aria-label="Potvrzeno"/>
                 <div class="h4 mb-1">Automaticky potvrzeno</div>
-                <div t-if="fio.detail" class="small" t-out="fio.detail"/>
-                <div class="small text-muted mt-1">Dokonči objednávku tlačítkem „Potvrdit platbu“.</div>
+                <div t-if="this.fio.detail" class="small" t-out="this.fio.detail"/>
+                <div class="small text-muted mt-1">Dokonči objednávku potvrzením platby.</div>
             </div>
-            <div t-elif="fio.status === 'checking'" class="fio_qr_checking w-100 mt-2" style="max-width: 320px;">
-                <div class="d-flex justify-content-between small text-muted">
-                    <span><i class="fa fa-refresh fa-spin me-1" role="img" aria-label="Kontrola"/>Čekám na platbu v bance…</span>
-                    <span class="ms-2 text-nowrap">
-                        <span class="fio_qr_countdown" t-esc="fioCountdownLabel"/>
-                        <span class="fio_qr_interval ms-1 opacity-75">(<t t-esc="fioIntervalLabel"/>)</span>
+            <div t-elif="this.fio.status === 'checking'" class="fio_qr_checking w-75 mb-2" style="max-width: 320px;">
+                <div class="d-flex flex-wrap justify-content-between column-gap-2 small text-muted">
+                    <span class="text-nowrap"><i class="oi oi-spin me-1" data-icon="autorenew" role="img" aria-label="Kontrola"/>Čekám na platbu v bance…</span>
+                    <span class="text-nowrap">
+                        <span class="fio_qr_countdown" t-out="this.fioCountdownLabel()"/>
+                        <span class="fio_qr_interval ms-1 opacity-75">(<t t-out="this.fioIntervalLabel()"/>)</span>
                     </span>
                 </div>
                 <div class="progress mt-1" style="height: 6px;">
-                    <div class="progress-bar bg-info fio_qr_progress" role="progressbar" t-attf-style="width: {{ fioProgressPercent }}%; transition: width 0.25s linear;"/>
+                    <div class="progress-bar bg-info fio_qr_progress" role="progressbar" t-attf-style="width: {{ this.fioProgressPercent() }}%; transition: width 0.25s linear;"/>
                 </div>
             </div>
-            <div t-elif="fio.status === 'error'" class="fio_qr_error small text-warning mt-2" t-out="fio.detail"/>
+            <div t-elif="this.fio.status === 'error'" class="fio_qr_error small text-warning mb-2" t-out="this.fio.detail"/>
         </xpath>
-        <!-- po potvrzení bankou je hlavní akcí Potvrdit platbu (zelené), Zrušit ustoupí -->
-        <xpath expr="//button[@t-on-click='_confirm']" position="attributes">
-            <attribute name="class" remove="btn-secondary" separator=" "/>
-            <attribute name="t-att-class">{ 'btn-success': fio.status === 'confirmed', 'btn-secondary': fio.status !== 'confirmed' }</attribute>
-        </xpath>
-        <xpath expr="//button[@t-on-click='_cancel']" position="attributes">
+        <!-- po potvrzení bankou je potvrzení platby zelené -->
+        <xpath expr="//button[hasclass('confirm-button')]" position="attributes">
             <attribute name="class" remove="btn-primary" separator=" "/>
-            <attribute name="t-att-class">{ 'btn-primary': fio.status !== 'confirmed', 'btn-secondary': fio.status === 'confirmed' }</attribute>
+            <attribute name="t-att-class">{ 'btn-success': this.fio.status === 'confirmed', 'btn-primary': this.fio.status !== 'confirmed' }</attribute>
         </xpath>
     </t>
 

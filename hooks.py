@@ -14,7 +14,7 @@ def post_init_hook(env):
            SET fio_state = 'pending'
           FROM pos_payment_method m
          WHERE m.id = p.payment_method_id
-           AND (m.payment_method_type = 'qr_code' OR m.qr_code_method IS NOT NULL)
+           AND (m.payment_method_type = 'bank_qr_code' OR m.qr_code_method IS NOT NULL)
            AND COALESCE(p.is_change, false) = false
            AND (p.fio_state IS NULL OR p.fio_state = 'none')
         """
@@ -28,7 +28,7 @@ def post_init_hook(env):
           FROM pos_payment p
           JOIN pos_payment_method m ON m.id = p.payment_method_id
           JOIN account_journal j ON j.id = m.journal_id
-         WHERE (m.payment_method_type = 'qr_code' OR m.qr_code_method IS NOT NULL)
+         WHERE (m.payment_method_type = 'bank_qr_code' OR m.qr_code_method IS NOT NULL)
            AND j.bank_account_id IS NOT NULL
          GROUP BY j.bank_account_id
         """
@@ -37,4 +37,4 @@ def post_init_hook(env):
         bank = env["res.partner.bank"].browse(bank_id)
         if bank.exists() and not bank.fio_history_from and first_date:
             bank.fio_history_from = first_date - timedelta(days=3)
-            _logger.info("fio_qr_payment_validation: účet %s, historie od %s", bank.acc_number, bank.fio_history_from)
+            _logger.info("fio_qr_payment_validation: účet %s, historie od %s", bank.account_number, bank.fio_history_from)

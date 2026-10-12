@@ -170,6 +170,9 @@ class FioBankTransaction(models.Model):
         text = self._search_text()
         if not text:
             return []
+        # SQL nevidí změny čekající v ORM (např. stav nové platby v téže transakci)
+        self.env["pos.payment"].flush_model(["fio_state", "amount", "pos_order_id"])
+        self.env["pos.order"].flush_model(["pos_reference"])
         self.env.cr.execute(
             r"""
             SELECT p.id
@@ -278,6 +281,7 @@ class FioBankTransaction(models.Model):
         vs = digits(variable_symbol)
         if not vs:
             return self.env["account.move"].sudo()
+        self.env["account.move"].flush_model(["move_type", "state", "payment_reference"])
         self.env.cr.execute(
             r"""
             SELECT id FROM account_move
