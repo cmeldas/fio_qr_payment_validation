@@ -21,7 +21,7 @@ ručně – o víkendu dorazí platby často až v pondělí. Po instalaci jde s
 celá historie účtu a spárovat i staré platby. Nespárované QR platby pokladny
 jsou v přehledu ke kontrole, kde je lze ručně potvrdit nebo ignorovat.
 """,
-    "version": "20.0.1.2.0",
+    "version": "20.0.1.2.1",
     "category": "Sales/Point of Sale",
     "author": "Matouš Čmelík",
     "website": "https://github.com/cmeldas/fio_qr_payment_validation",

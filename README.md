@@ -148,9 +148,10 @@ v seznamu a u účtu v poli „Poslední chyba Fio“ (s názvem tokenu):
   potvrzení, které drží do kliknutí obsluhy) a `PosPayment.getQrPopupProps()` (UUID platby
   `fioPaymentUuid` a příznak `fioConfirmed`); `static/src/app/fio_pending/*` ikona v liště
   (`Navbar`) s počtem čekajících plateb, popup `FioPendingDialog` a obnova po
-  `PosStore.syncAllOrders`; `static/src/customer_display/fio_customer_display.xml` překryv na
-  zákaznickém displeji (bundle `point_of_sale.customer_display_assets`), viditelný dokud
-  pokladna v datech QR posílá `fioConfirmed`.
+  `PosStore.syncAllOrders`; `static/src/customer_display/fio_customer_display.xml` zelené
+  „Platba přijata“ s částkou přes levou část zákaznického displeje, kde je QR kód (bundle
+  `point_of_sale.customer_display_assets`; od 20.0.1.2.1 jen vlevo, seznam zboží vpravo
+  zůstává vidět), viditelné dokud pokladna v datech QR posílá `fioConfirmed`.
 - Nastavení pokladny: _Nespárované QR platby: dny zpět_ (`pos.config.fio_pending_days`,
   výchozí 14, 0 = bez omezení) určuje, co ikona v liště počítá; data dodává
   `pos.payment.fio_pending_overview(config_id)`, tlačítko v popupu
