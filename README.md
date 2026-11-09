@@ -41,10 +41,15 @@ pozadí do stavu _Čeká na banku_.
    „261-1-000005“). Rozdíl se uloží k pohybu jako **Dýško** (vidět i u platby). Podle čísla
    objednávky se párují i **ignorované** platby – zákazník občas zaplatí až o dny později; když
    textu odpovídá čekající i ignorovaná platba, má přednost čekající.
-2. **Při otevřeném QR** navíc platí záložní pravidlo: když číslo objednávky ve zprávě chybí,
-   ale existuje **právě jeden** dnešní nebo včerejší nespárovaný pohyb v částce platby až
-   platby + 50 % (dýško bez čísla objednávky), bere se jako platba probíhající objednávky
-   (`Jen částka`). Cron toto pravidlo nepoužívá.
+2. **Jen podle částky se automaticky nepáruje nikdy**, ani v pokladně při otevřeném QR, ani
+   cronem. Pohyb bez čísla objednávky ve zprávě (zákazník poslal peníze převodem bez QR)
+   zůstane nespárovaný a obsluha ho spáruje ručně. Do 20.0.1.2.1 platilo při otevřeném QR
+   záložní pravidlo: právě jeden dnešní nebo včerejší nespárovaný pohyb v částce platby až
+   platby + 50 % se vzal jako platba (`Jen částka`). 8. 11. 2026 tak pokladna potvrdila
+   nezaplacenou objednávku 494 Kč proti převodu 600 Kč z vlastního účtu z předchozího dne
+   (106 Kč jako „dýško“). Pravidlo je od 20.0.1.2.2 pryč a stará rezervace jen podle částky
+   se po aktualizaci nepoužije. Od 20.0.1.3.0 nabízí kandidáty podle částky seznam
+   _Spárovat podle částky_ (viz Menu a pohledy), spáruje je obsluha.
 3. **Faktury** – variabilní symbol pohybu = číslice z platební reference vystavené faktury
    (`payment_reference`), faktura je zaúčtovaná.
 
@@ -127,6 +132,21 @@ v seznamu a u účtu v poli „Poslední chyba Fio“ (s názvem tokenu):
 
 - _Prodejní místo › Objednávky › QR platby ke kontrole_ – QR platby pokladny podle stavu
   ověření, výchozí filtr _Čeká na banku_, řádkové akce potvrdit ručně / ignorovat / vrátit.
+  Tlačítko **Spárovat podle částky** (správce pokladny; bez výběru všechny nespárované platby,
+  s výběrem jen vybrané) otevře seznam dvojic platba × pohyb, viz níže.
+- **Spárovat podle částky** (od 20.0.1.3.0) – dvojice QR platba (_Čeká na banku_ nebo
+  _Potvrzeno ručně_) × nespárovaný příchozí pohyb Fio na účet její platební metody v částce
+  platby, se dnem v bance od 2 dnů před dnem objednávky do 30 dnů po něm (starší a pozdější
+  pohyby jsou jen šum); výchozí filtr _Přesná částka_, bez něj i pohyby vyšší o dýško do 50 %. Sloupce:
+  objednáno, číslo objednávky, objednané zboží, částka, **Peníze v Odoo** a **Po objednávce**
+  (hodiny a minuty; zeleně do 1 h, oranžově do 24 h, červeně a šedě později nebo záporně, tj. peníze
+  přišly dřív než objednávka), přišlo, dýško, plátce, zpráva. Fio neposílá čas pohybu, jen den:
+  _Peníze v Odoo_ je okamžik stažení (při běžící pokladně do pár minut, jinak do hodiny),
+  nejpozději konec dne zaúčtování. Řádkem se otevře objednávka (co si zákazník objednal) nebo
+  pohyb; **Spárovat** na řádku nebo _Spárovat vybrané_ spáruje způsobem _Ručně_ (poznámka u pohybu).
+  Každá platba i pohyb smí být ve výběru jen jednou; změnil-li se mezitím stav, nespáruje se nic.
+  Model `fio.amount.match` nemá tabulku, počítá se živě dotazem (`_table_sql`), id řádku =
+  id platby × 10⁹ + id pohybu, takže tlačítko spáruje vždy dvojici, kterou obsluha viděla.
 - _Prodejní místo › Objednávky › Pohyby Fio_ – všechny stažené pohyby, výchozí filtr
   _Nespárované příchozí_, akce ručně spárovat / ignorovat / zrušit spárování.
 - _Prodejní místo › Objednávky › Platby_ – nový sloupec a filtry _Ověření Fio_.

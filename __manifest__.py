@@ -19,9 +19,11 @@ Stahuje pohyby z účtu u Fio banky (REST API, token jen pro čtení) a páruje 
 Každou hodinu (a tlačítkem) se stáhnou nové pohyby a spárují i platby potvrzené
 ručně – o víkendu dorazí platby často až v pondělí. Po instalaci jde stáhnout
 celá historie účtu a spárovat i staré platby. Nespárované QR platby pokladny
-jsou v přehledu ke kontrole, kde je lze ručně potvrdit nebo ignorovat.
+jsou v přehledu ke kontrole, kde je lze ručně potvrdit nebo ignorovat. Podle samotné
+částky se nepáruje automaticky nikdy; seznam „Spárovat podle částky“ nabídne dvojice
+platba × pohyb ve stejné částce s odstupem od objednávky a obsluha je spáruje sama.
 """,
-    "version": "20.0.1.2.1",
+    "version": "20.0.1.3.0",
     "category": "Sales/Point of Sale",
     "author": "Matouš Čmelík",
     "website": "https://github.com/cmeldas/fio_qr_payment_validation",
@@ -31,6 +33,7 @@ jsou v přehledu ke kontrole, kde je lze ručně potvrdit nebo ignorovat.
         "security/ir.access.csv",
         "data/ir_cron.xml",
         "views/fio_bank_transaction_views.xml",
+        "views/fio_amount_match_views.xml",
         "views/pos_payment_views.xml",
         "views/res_partner_bank_views.xml",
         "views/res_config_settings_views.xml",

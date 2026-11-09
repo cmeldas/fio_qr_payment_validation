@@ -75,7 +75,8 @@ class PosPayment(models.Model):
     def _fio_try_match(self):
         """Po uložení objednávky zkusí najít už stažený pohyb (rozpoznaný při otevřeném QR nebo cronem).
 
-        Pohyb musí platbu pokrývat: stejná částka nebo vyšší (dýško), nikdy nižší.
+        Pohyb musí platbu pokrývat: stejná částka nebo vyšší (dýško), nikdy nižší, a mít číslo
+        objednávky ve zprávě; přednost má pohyb rezervovaný pokladnou pro tuto objednávku.
         """
         self.ensure_one()
         Transaction = self.env["fio.bank.transaction"].sudo()
@@ -88,16 +89,14 @@ class PosPayment(models.Model):
             domain.append(("bank_account_id", "=", bank.id))
         candidates = Transaction.search(domain, order="date desc, id desc", limit=100)
         pos_reference = self.pos_order_id.pos_reference
-        reserved = candidates.filtered(lambda t: t.reserved_reference and t.reserved_reference == pos_reference)
-        if reserved:
-            tx = reserved[0]
-            match_type = "reference" if tx._text_matches_reference(pos_reference) else "amount"
-            tx._link_pos_payment(self, match_type)
+        matching = candidates.filtered(
+            lambda t: (not t.reserved_reference or t.reserved_reference == pos_reference)
+            and t._text_matches_reference(pos_reference)
+        )
+        tx = (matching.filtered(lambda t: t.reserved_reference == pos_reference) or matching)[:1]
+        if tx:
+            tx._link_pos_payment(self, "reference")
             return True
-        for tx in candidates:
-            if tx._text_matches_reference(pos_reference):
-                tx._link_pos_payment(self, "reference")
-                return True
         return False
 
     @api.model
@@ -218,6 +217,13 @@ class PosPayment(models.Model):
         """Vyřadit z kontroly. Hromadně bezpečné: mění jen platby čekající na banku."""
         self.filtered(lambda p: p.fio_state == "pending").write({"fio_state": "ignored"})
         return True
+
+    def action_fio_amount_match(self):
+        """Seznam ke spárování podle částky: vybrané platby, bez výběru všechny nespárované."""
+        action = self.env["ir.actions.act_window"]._for_xml_id("fio_qr_payment_validation.action_fio_amount_match")
+        if self:
+            action["domain"] = [("payment_id", "in", self.ids)]
+        return action
 
     def action_fio_reset_pending(self):
         """Vrátit ke kontrole; u platby potvrzené bankou se zruší i spárování pohybu."""

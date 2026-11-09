@@ -1,9 +1,7 @@
 # -*- coding: utf-8 -*-
-from datetime import timedelta
-
 from odoo import fields, models
 
-from .fio_bank_transaction import AMOUNT_TOLERANCE, TIP_MAX_RATIO
+from .fio_bank_transaction import AMOUNT_TOLERANCE
 
 
 class PosPaymentMethod(models.Model):
@@ -14,10 +12,13 @@ class PosPaymentMethod(models.Model):
 
         Stáhne nové pohyby z Fio dalším tokenem v pořadí (interval 30 s / počet tokenů) a hledá
         příchozí pohyb, který platbu pokrývá (stejná částka nebo vyšší o dýško, nikdy nižší)
-        a má číslo objednávky ve zprávě.
-        Když číslo chybí, vezme jediný dnešní nebo včerejší nespárovaný pohyb v částce platby
-        až platby + 50 % (platba právě probíhá, plátce zprávu neposlal). Nalezený pohyb si
-        rezervuje pro objednávku; spáruje se po jejím uložení.
+        a má číslo objednávky ve zprávě. Nalezený pohyb si rezervuje pro objednávku; spáruje se
+        po jejím uložení.
+
+        Jen podle částky se nepotvrzuje nikdy: do 20.0.1.2.1 se bral i jediný dnešní nebo
+        včerejší pohyb bez čísla objednávky v částce platby až platby + 50 % a pokladna tak
+        potvrdila nezaplacenou objednávku (494 Kč proti převodu 600 Kč z vlastního účtu
+        z předchozího dne). Pohyb bez čísla objednávky se páruje jen ručně.
         """
         self.ensure_one()
         bank = self.sudo().journal_id.bank_account_id
@@ -33,26 +34,14 @@ class PosPaymentMethod(models.Model):
         candidates = candidates.filtered(
             lambda t: not t.reserved_reference or t.reserved_reference == pos_reference
         )
-        match, match_type = None, None
-        for tx in candidates:
-            if tx._text_matches_reference(pos_reference):
-                match, match_type = tx, "reference"
-                break
-        if not match:
-            since = fields.Date.context_today(self) - timedelta(days=1)
-            recent = candidates.filtered(
-                lambda t: t.date and t.date >= since
-                and t.amount <= amount * (1 + TIP_MAX_RATIO) + AMOUNT_TOLERANCE
-            )
-            if len(recent) == 1:
-                match, match_type = recent[0], "amount"
+        match = next((tx for tx in candidates if tx._text_matches_reference(pos_reference)), None)
         if match:
             match.reserved_reference = pos_reference
             return {
                 "enabled": True,
                 "confirmed": True,
                 "transaction_id": match.id,
-                "match_type": match_type,
+                "match_type": "reference",
                 "counter_name": match.counter_name or "",
                 "date": fields.Date.to_string(match.date) if match.date else "",
                 "amount": match.amount,

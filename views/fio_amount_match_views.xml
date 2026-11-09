@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Ruční párování podle částky: dvojice nespárovaná QR platba × nespárovaný příchozí pohyb -->
+    <record id="view_fio_amount_match_list" model="ir.ui.view">
+        <field name="name">fio.amount.match.list</field>
+        <field name="model">fio.amount.match</field>
+        <field name="arch" type="xml">
+            <list string="Spárovat podle částky" create="0" edit="0" delete="0"
+                  decoration-muted="delay_hours &lt; 0 or delay_hours &gt; 24">
+                <header>
+                    <button name="action_match" type="object" string="Spárovat vybrané" class="btn-primary"
+                            confirm="Vybrané QR platby se spárují s pohyby na stejném řádku (způsob Ručně). Každá platba i pohyb smí být vybrané jen jednou. Pokračovat?"/>
+                </header>
+                <field name="currency_id" column_invisible="True"/>
+                <field name="is_exact" column_invisible="True"/>
+                <field name="payment_date"/>
+                <field name="pos_reference"/>
+                <field name="pos_order_id" optional="hide"/>
+                <field name="pos_config_id" optional="hide"/>
+                <field name="order_summary" optional="show"/>
+                <field name="payment_amount" sum="Celkem"/>
+                <field name="payment_state" widget="badge" optional="hide"
+                       decoration-warning="payment_state == 'pending'"
+                       decoration-info="payment_state == 'manual'"/>
+                <field name="arrived_at" optional="show"/>
+                <field name="delay_hours" widget="float_time"
+                       decoration-success="delay_hours &gt;= 0 and delay_hours &lt;= 1"
+                       decoration-warning="delay_hours &gt; 1 and delay_hours &lt;= 24"
+                       decoration-danger="delay_hours &lt; 0 or delay_hours &gt; 24"/>
+                <field name="tx_amount"/>
+                <field name="tip_amount" invisible="is_exact" optional="show"/>
+                <field name="counter_name"/>
+                <field name="message" optional="show"/>
+                <field name="counter_account" optional="hide"/>
+                <field name="transaction_type" optional="hide"/>
+                <field name="tx_date" optional="hide"/>
+                <button name="action_open_pos_order" type="object" icon="shopping_basket"
+                        title="Otevřít objednávku (co si zákazník objednal)"/>
+                <button name="action_open_transaction" type="object" icon="payments" title="Otevřít pohyb Fio"/>
+                <button name="action_match" type="object" string="Spárovat" class="btn-primary btn-sm"
+                        confirm="Spárovat tuto QR platbu s tímto pohybem (způsob Ručně)?"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_fio_amount_match_search" model="ir.ui.view">
+        <field name="name">fio.amount.match.search</field>
+        <field name="model">fio.amount.match</field>
+        <field name="arch" type="xml">
+            <search string="Spárovat podle částky">
+                <field name="pos_reference"/>
+                <field name="counter_name"/>
+                <field name="message"/>
+                <field name="payment_amount"/>
+                <filter name="exact" string="Přesná částka" domain="[('is_exact', '=', True)]"/>
+                <filter name="with_tip" string="Vyšší o dýško (do 50 %)" domain="[('is_exact', '=', False)]"/>
+                <separator/>
+                <filter name="within_day" string="Do 24 h po objednávce"
+                        domain="[('delay_hours', '&gt;=', 0), ('delay_hours', '&lt;=', 24)]"/>
+                <separator/>
+                <filter name="pending" string="Čeká na banku" domain="[('payment_state', '=', 'pending')]"/>
+                <filter name="manual" string="Potvrzeno ručně" domain="[('payment_state', '=', 'manual')]"/>
+                <filter name="filter_payment_date" string="Objednáno" date="payment_date"/>
+                <group>
+                    <filter name="group_payment" string="Platba" context="{'group_by': 'payment_id'}"/>
+                    <filter name="group_transaction" string="Pohyb" context="{'group_by': 'transaction_id'}"/>
+                    <filter name="group_pos_config" string="Pokladna" context="{'group_by': 'pos_config_id'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="action_fio_amount_match" model="ir.actions.act_window">
+        <field name="name">Spárovat podle částky</field>
+        <field name="res_model">fio.amount.match</field>
+        <field name="view_mode">list</field>
+        <field name="context">{'search_default_exact': 1}</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">Žádná nespárovaná QR platba nemá pohyb ve stejné částce</p>
+            <p>Dvojice QR platba z pokladny (čeká na banku nebo potvrzená ručně) a nespárovaný příchozí
+               pohyb Fio v částce platby, ze dne v bance od 2 dnů před objednávkou do 30 dnů po ní;
+               bez filtru Přesná částka i pohyby vyšší o dýško do 50 %.
+               Podle částky se samo nepáruje nikdy. Posuď, jestli k sobě patří: kolik hodin po objednávce
+               peníze přišly, od koho a co si zákazník objednal.</p>
+        </field>
+    </record>
+</odoo>

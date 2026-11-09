@@ -82,6 +82,9 @@
                             confirm="Vybrané platby ve stavu „Čeká na banku“ se vyřadí z kontroly. Pokračovat?"/>
                     <button name="action_fio_reset_pending" type="object" string="Vrátit ke kontrole"
                             groups="point_of_sale.group_pos_manager"/>
+                    <!-- bez výběru všechny nespárované platby, s výběrem jen vybrané -->
+                    <button name="action_fio_amount_match" type="object" string="Spárovat podle částky" display="always"
+                            groups="point_of_sale.group_pos_manager"/>
                 </header>
                 <field name="currency_id" column_invisible="True"/>
                 <field name="payment_date"/>

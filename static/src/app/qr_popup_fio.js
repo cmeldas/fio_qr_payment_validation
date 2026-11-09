@@ -44,8 +44,8 @@ patch(PosPayment.prototype, {
 /**
  * Ověření QR platby proti Fio, dokud je otevřený QR kód v pokladně.
  *
- * Server vrací `confirmed`, když na účet dorazil příchozí pohyb pokrývající částku
- * s číslem objednávky ve zprávě (nebo jediný dnešní pohyb v té částce). Pohyb si
+ * Server vrací `confirmed`, jen když na účet dorazil příchozí pohyb pokrývající částku
+ * s číslem objednávky ve zprávě; podle samotné částky nikdy. Pohyb si
  * server rezervuje pro objednávku a spáruje ho při jejím uložení. Popup ukáže zelené
  * „Automaticky potvrzeno“ a pošle stav na zákaznický displej; potvrzení zůstává, dokud
  * obsluha neklikne na potvrzení platby (zákazník tak vidí „Platba přijata“ stejně dlouho).

@@ -13,9 +13,8 @@ _logger = logging.getLogger(__name__)
 
 AMOUNT_TOLERANCE = 0.005
 MIN_REFERENCE_KEY_LENGTH = 6
-# Pohyb může být vyšší než platba (plátce přidal dýško), nikdy nižší. Bez čísla objednávky
-# (jen podle částky, při otevřeném QR) se dýško toleruje nejvýš do této části platby.
-TIP_MAX_RATIO = 0.5
+# Pohyb může být vyšší než platba (plátce přidal dýško), nikdy nižší. Automaticky se páruje
+# jen pohyb s číslem objednávky ve zprávě, podle samotné částky nikdy (viz 20.0.1.2.2).
 
 
 def digits(value):
@@ -56,6 +55,7 @@ class FioBankTransaction(models.Model):
         [
             ("reference", "Číslo objednávky ve zprávě"),
             ("variable_symbol", "Variabilní symbol faktury"),
+            # jen u pohybů spárovaných do 20.0.1.2.1, nové se tak nepárují
             ("amount", "Jen částka (platba právě probíhala)"),
             ("manual", "Ručně"),
         ],
@@ -236,12 +236,12 @@ class FioBankTransaction(models.Model):
 
     def _try_match_pos(self):
         self.ensure_one()
-        if self.reserved_reference:
+        # rezervace z otevřeného QR platí, jen když je číslo objednávky opravdu ve zprávě
+        # (rezervace jen podle částky ze starší verze se nepoužije)
+        if self.reserved_reference and self._text_matches_reference(self.reserved_reference):
             reserved = self._pos_candidates(pos_reference=self.reserved_reference)
             if reserved:
-                payment = reserved.sorted("id")[0]
-                match_type = "reference" if self._text_matches_reference(payment.pos_order_id.pos_reference) else "amount"
-                self._link_pos_payment(payment, match_type)
+                self._link_pos_payment(reserved.sorted("id")[0], "reference")
                 return True
         candidates = self._pos_candidates()
         # přednost mají čekající / ručně potvrzené platby, ignorované až po nich; v rámci skupiny nejnovější

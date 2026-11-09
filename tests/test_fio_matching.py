@@ -6,12 +6,12 @@ from datetime import date, timedelta
 from unittest.mock import patch
 
 from odoo import Command, fields
-from odoo.exceptions import UserError, ValidationError
+from odoo.exceptions import AccessError, UserError, ValidationError
 from odoo.modules.neutralize import get_neutralization_queries
 from odoo.tools import mute_logger
 from odoo.tools.misc import file_path
 from psycopg2 import IntegrityError
-from odoo.tests import tagged
+from odoo.tests import new_test_user, tagged
 from odoo.addons.point_of_sale.tests.common import CommonPosTest
 
 from ..models import fio_api
@@ -324,12 +324,13 @@ class TestFioMatching(CommonPosTest):
 
     def test_pos_check_reserves_transaction(self):
         method = self.qr_payment_method
-        items = fio_api.parse_transactions(fio_payload([fio_transaction(201, date.today(), 77.0, "bez cisla")]))
+        # QR zpráva bez mezer: Order + číslo objednávky + tracking
+        items = fio_api.parse_transactions(fio_payload([fio_transaction(201, date.today(), 77.0, "Order300-1-00000111")]))
         with patch.object(fio_api, "fetch_last", return_value=items) as fetch_last:
             res = method.fio_check_qr_payment(77.0, "Order 300-1-000001", self.currency_id)
             self.assertTrue(res["enabled"])
             self.assertTrue(res["confirmed"])
-            self.assertEqual(res["match_type"], "amount")
+            self.assertEqual(res["match_type"], "reference")
             fetch_last.assert_called_once()
             res2 = method.fio_check_qr_payment(77.0, "Order 300-1-000001", self.currency_id)
             self.assertTrue(res2["confirmed"])
@@ -353,27 +354,117 @@ class TestFioMatching(CommonPosTest):
         payment = order.payment_ids
         self.assertEqual(payment.fio_state, "confirmed", "uložení objednávky spáruje rezervovaný pohyb")
         self.assertEqual(payment.fio_transaction_id, tx)
-        self.assertEqual(tx.match_type, "amount")
+        self.assertEqual(tx.match_type, "reference")
         self.assertFalse(tx.reserved_reference)
+
+    def test_pos_check_never_confirms_by_amount_only(self):
+        """Regrese z 8. 11. 2026: QR 494 Kč se potvrdilo proti včerejšímu převodu 600 Kč z vlastního
+        účtu (bez zprávy), i když zákazník ještě nezaplatil. Bez čísla objednávky se nepotvrzuje nikdy,
+        ani při přesné částce, ani při jediném kandidátovi."""
+        method = self.qr_payment_method
+        own_transfer = fio_transaction(221, date.today() - timedelta(days=1), 600.0, counter_name="Vlastní účet")
+        own_transfer["column8"] = fio_cell("Příjem převodem uvnitř banky")
+        items = fio_api.parse_transactions(fio_payload([own_transfer]))
+        with patch.object(fio_api, "fetch_last", return_value=items):
+            res = method.fio_check_qr_payment(494.0, "2613-1-000136", self.currency_id)
+        self.assertFalse(res["confirmed"], "vyšší pohyb bez čísla objednávky není platba téhle objednávky")
+
+        self._rest()
+        items = fio_api.parse_transactions(fio_payload([fio_transaction(222, date.today(), 77.0, "bez cisla")]))
+        with patch.object(fio_api, "fetch_last", return_value=items):
+            res = method.fio_check_qr_payment(77.0, "Order 300-1-000020", self.currency_id)
+        self.assertFalse(res["confirmed"], "ani jediný dnešní pohyb v přesné částce bez čísla objednávky")
+
+        txs = self.env["fio.bank.transaction"].search([("fio_id", "in", ("221", "222"))])
+        self.assertEqual(len(txs), 2)
+        self.assertFalse(any(txs.mapped("reserved_reference")), "pohyb bez čísla objednávky se nerezervuje")
+        order = self._order(self.product_77, method, pos_reference="Order 300-1-000020")
+        self.assertEqual(order.payment_ids.fio_state, "pending", "ani po uložení objednávky se nespáruje")
+        self.env["fio.bank.transaction"]._match_pending()
+        self.assertEqual(order.payment_ids.fio_state, "pending", "ani cronem")
+        self.assertEqual(set(txs.mapped("state")), {"new"})
+
+    def test_reservation_without_reference_is_not_used(self):
+        """Rezervace jen podle částky ze starší verze (20.0.1.2.1) se po aktualizaci nespáruje."""
+        tx = self._store([fio_transaction(231, date.today(), 77.0, "bez cisla")])
+        tx.reserved_reference = "Order 300-1-000030"
+        order = self._order(self.product_77, self.qr_payment_method, pos_reference="Order 300-1-000030")
+        self.assertEqual(order.payment_ids.fio_state, "pending")
+        self.env["fio.bank.transaction"]._match_pending()
+        self.assertEqual(order.payment_ids.fio_state, "pending")
+        self.assertEqual(tx.state, "new")
+
+    def _fio_txs(self, *fio_ids):
+        Transaction = self.env["fio.bank.transaction"]
+        return [Transaction.search([("fio_id", "=", str(fio_id))]) for fio_id in fio_ids]
+
+    def test_amount_match_list(self):
+        """Seznam „Spárovat podle částky“: přesná částka i dýško do 50 %, nižší a o víc vyšší pohyb ne;
+        spárování ručně, spárovaná platba ze seznamu zmizí, zastaralý řádek se nespáruje."""
+        Match = self.env["fio.amount.match"]
+        order = self._order(self.product_77, self.qr_payment_method, pos_reference="Order 300-1-000040")
+        payment = order.payment_ids
+        self.assertEqual(payment.fio_state, "pending")
+        self._store([
+            fio_transaction(241, date.today(), 77.0, "bez cisla"),
+            fio_transaction(242, date.today(), 90.0, "bez cisla"),
+            fio_transaction(243, date.today(), 70.0, "bez cisla"),
+            fio_transaction(244, date.today(), 200.0, "bez cisla"),
+        ])
+        exact, tip, _lower, _higher = self._fio_txs(241, 242, 243, 244)
+        rows = Match.search([("payment_id", "=", payment.id)])
+        self.assertEqual(rows.transaction_id, exact | tip, "nižší ani o víc než 50 % vyšší pohyb se nenabízí")
+        row_exact = rows.filtered(lambda r: r.transaction_id == exact)
+        self.assertEqual(row_exact.id, payment.id * 1_000_000_000 + exact.id, "id dvojice je stabilní")
+        self.assertTrue(row_exact.is_exact)
+        self.assertEqual(row_exact.pos_order_id, order)
+        self.assertLess(abs(row_exact.delay_hours), 3, "pohyb stažený hned po objednávce")
+        self.assertIn("Káva", row_exact.order_summary)
+        row_tip = rows - row_exact
+        self.assertFalse(row_tip.is_exact)
+        self.assertAlmostEqual(row_tip.tip_amount, 13.0)
+        self.assertEqual(Match.search([("payment_id", "=", payment.id), ("is_exact", "=", True)]), row_exact)
+
+        with self.assertRaises(UserError, msg="dva pohyby k jedné platbě naráz ne"):
+            rows.action_match()
+        row_exact.action_match()
+        self.assertEqual(payment.fio_state, "confirmed")
+        self.assertEqual(payment.fio_transaction_id, exact)
+        self.assertEqual(exact.match_type, "manual")
+        self.assertEqual(tip.state, "new")
+        self.assertFalse(Match.search([("payment_id", "=", payment.id)]), "spárovaná platba ze seznamu zmizí")
+        with self.assertRaises(UserError, msg="zastaralý řádek: platba je mezitím spárovaná"):
+            row_tip.action_match()
+        self.assertEqual(tip.state, "new")
+
+    def test_amount_match_delay_action_and_access(self):
+        order = self._order(self.product_77, self.qr_payment_method, pos_reference="Order 300-1-000050")
+        payment = order.payment_ids
+        self._store([
+            fio_transaction(251, date.today() - timedelta(days=1), 77.0),
+            fio_transaction(252, date.today() - timedelta(days=5), 77.0),
+            fio_transaction(253, date.today() + timedelta(days=40), 77.0),
+        ])
+        tx, _too_early, _too_late = self._fio_txs(251, 252, 253)
+        rows = self.env["fio.amount.match"].search([("payment_id", "=", payment.id)])
+        self.assertEqual(rows.transaction_id, tx, "jen pohyby od 2 dnů před objednávkou do 30 dnů po ní")
+        self.assertLess(rows.delay_hours, 0, "pohyb ze včerejška přišel dřív než objednávka")
+        row = rows
+
+        action = payment.action_fio_amount_match()
+        self.assertEqual(action["res_model"], "fio.amount.match")
+        self.assertEqual(action["domain"], [("payment_id", "in", payment.ids)])
+        self.assertIn(self.env["pos.payment"].action_fio_amount_match().get("domain"), (False, None, "[]", []),
+                      "bez výběru všechny nespárované platby")
+
+        cashier = new_test_user(self.env, login="fio_cashier", groups="point_of_sale.group_pos_user")
+        with self.assertRaises(AccessError):
+            row.with_user(cashier).action_match()
+        self.assertEqual(payment.fio_state, "pending")
 
     def test_pos_check_tip_rules(self):
         method = self.qr_payment_method
-        # jen podle částky: dýško do 50 % platby projde, větší pohyb bez čísla objednávky ne
-        items = fio_api.parse_transactions(fio_payload([fio_transaction(211, date.today(), 90.0, "bez cisla")]))
-        with patch.object(fio_api, "fetch_last", return_value=items):
-            res = method.fio_check_qr_payment(77.0, "Order 300-1-000011", self.currency_id)
-        self.assertTrue(res["confirmed"])
-        self.assertEqual(res["match_type"], "amount")
-        self.assertAlmostEqual(res["tip"], 13.0)
-
-        self._rest()
-        items = fio_api.parse_transactions(fio_payload([fio_transaction(212, date.today(), 200.0, "bez cisla")]))
-        with patch.object(fio_api, "fetch_last", return_value=items):
-            res = method.fio_check_qr_payment(77.0, "Order 300-1-000012", self.currency_id)
-        self.assertFalse(res["confirmed"], "pohyb o víc než 50 % vyšší bez čísla objednávky se nebere")
-
         # s číslem objednávky projde libovolně vyšší pohyb, nižší nikdy
-        self._rest()
         items = fio_api.parse_transactions(fio_payload([
             fio_transaction(213, date.today(), 70.0, "Order 300-1-000013 1"),
             fio_transaction(214, date.today(), 200.0, "Order 300-1-000013 1"),
@@ -816,7 +907,7 @@ class TestFioMatching(CommonPosTest):
         cr = self.env.cr
         Data = self.env["ir.model.data"]
         current = Data.search([("module", "=", "fio_qr_payment_validation"), ("model", "=", "ir.access")])
-        self.assertEqual(len(current), 6, "práva modulu jsou v 20 záznamy ir.access")
+        self.assertEqual(len(current), 8, "práva modulu jsou v 20 záznamy ir.access (od 20.0.1.3.0 i fio.amount.match)")
         legacy = Data.create({
             "module": "fio_qr_payment_validation", "name": "access_legacy_from_19",
             "model": "ir.model.access", "res_id": 987654,
@@ -826,6 +917,6 @@ class TestFioMatching(CommonPosTest):
         self._migration("20.0.1.2.0", "pre").migrate(cr, "19.0.1.2.0")
         self.env.invalidate_all()
         self.assertFalse(legacy.exists(), "XML ID na zrušený model ir.model.access se smaže")
-        self.assertEqual(len(current.exists()), 6, "XML ID ir.access zůstávají")
+        self.assertEqual(len(current.exists()), len(current), "XML ID ir.access zůstávají")
         self.assertEqual(self.qr_payment_method.payment_method_type, "bank_qr_code")
         self._migration("20.0.1.2.0", "pre").migrate(cr, "19.0.1.2.0")  # podruhé nic nerozbije

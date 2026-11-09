@@ -5,3 +5,5 @@ access_fio_bank_transaction_account_manager,fio.bank.transaction account manager
 access_fio_match_wizard_pos_manager,fio.match.wizard pos manager,fio.match.wizard,point_of_sale.group_pos_manager,crud,
 access_fio_match_wizard_account_manager,fio.match.wizard account manager,fio.match.wizard,account.group_account_manager,crud,
 access_fio_api_token_system,fio.api.token system,fio.api.token,base.group_system,crud,
+access_fio_amount_match_pos_manager,fio.amount.match pos manager,fio.amount.match,point_of_sale.group_pos_manager,r,
+access_fio_amount_match_account_manager,fio.amount.match account manager,fio.amount.match,account.group_account_manager,r,
